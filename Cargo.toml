@@ -1,4 +1,6 @@
-[workspace]
-members = ["example"]
-resolver = "2"
+[package]
+name = "tcio"
+version = "0.1.0"
+edition = "2024"
 
+[dependencies]
