@@ -2,6 +2,11 @@
 name = "tcio"
 version = "0.1.0"
 edition = "2024"
+authors = ["Aria Andika <andikaakun17@gmail.com>"]
+documentation = "https://docs.rs/tcio"
+repository = "https://github.com/ariaandika/tcio"
+readme = "README.md"
+license = "MIT"
 
 [dependencies]
 bytes = "1.10.1"
