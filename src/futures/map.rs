@@ -7,7 +7,7 @@ use std::pin::Pin;
 /// ```
 /// # async fn app() {
 /// use tcio::futures::map;
-/// let fut = std::future::ready(112);
+/// let fut = async { 112 };
 /// let result = map(fut, |e| e.to_string()).await;
 /// assert_eq!(&result[..], "112");
 /// # }

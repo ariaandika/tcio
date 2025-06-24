@@ -7,7 +7,7 @@ use std::{pin::Pin, task::ready};
 /// ```
 /// # async fn app() {
 /// use tcio::futures::then;
-/// let fut = std::future::ready(112);
+/// let fut = async { 112 };
 /// let result = then(fut, |e| async move { e.to_string() }).await;
 /// assert_eq!(&result[..], "112");
 /// # }
