@@ -7,6 +7,8 @@ mod bytestr;
 mod either;
 mod either_map;
 
+pub mod futures;
+
 pub use bytestr::ByteStr;
 pub use either::Either;
 pub use either_map::EitherMap;
