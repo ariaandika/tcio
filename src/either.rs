@@ -10,7 +10,9 @@ use crate::EitherMap;
 /// For implementation that output another either type, use [`EitherMap`].
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Either<L, R> {
+    /// Left variant.
     Left(L),
+    /// Right variant.
     Right(R),
 }
 

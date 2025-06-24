@@ -8,7 +8,9 @@ use crate::Either;
 /// [`Future::Output`], will output another either type.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum EitherMap<L, R> {
+    /// Left variant.
     Left(L),
+    /// Right variant.
     Right(R),
 }
 

@@ -179,12 +179,14 @@ impl std::ops::Deref for ByteStr {
 // ===== Others =====
 
 impl std::fmt::Display for ByteStr {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self.as_str(), f)
     }
 }
 
 impl std::fmt::Debug for ByteStr {
+    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Debug::fmt(self.as_str(), f)
     }
