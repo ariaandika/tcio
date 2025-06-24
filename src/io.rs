@@ -8,35 +8,23 @@ use std::{
 /// Asynchronous io operation.
 pub trait AsyncIo {
     /// Polls for read readiness.
-    ///
-    /// For more details, see [`TcpStream::poll_read_ready`].
     fn poll_read_ready(&self, cx: &mut std::task::Context) -> Poll<io::Result<()>>;
 
     /// Polls for write readiness.
-    ///
-    /// For more details, see [`TcpStream::poll_write_ready`].
     fn poll_write_ready(&self, cx: &mut std::task::Context) -> Poll<io::Result<()>>;
 
     /// Tries to read data from the stream into the provided buffer, returning how many bytes were
     /// read.
-    ///
-    /// For more details, see [`TcpStream::try_read`].
     fn try_read(&self, buf: &mut [u8]) -> io::Result<usize>;
 
     /// Tries to read data from the stream into the provided buffers, returning how many bytes were
     /// read.
-    ///
-    /// For more details, see [`TcpStream::try_read_vectored`].
     fn try_read_vectored(&self, bufs: &mut [io::IoSliceMut<'_>]) -> io::Result<usize>;
 
     /// Try to write a buffer to the stream, returning how many bytes were written.
-    ///
-    /// For more details, see [`TcpStream::try_write`].
     fn try_write(&self, buf: &[u8]) -> io::Result<usize>;
 
     /// Try to write a buffer to the stream, returning how many bytes were written.
-    ///
-    /// For more details, see [`TcpStream::try_write_vectored`].
     fn try_write_vectored(&self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize>;
 
     /// Returns `true` if the underlying io support vectored write.
