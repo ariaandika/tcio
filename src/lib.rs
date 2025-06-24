@@ -8,6 +8,8 @@ mod either;
 mod either_map;
 
 pub mod futures;
+#[cfg(feature = "tokio")]
+pub mod tokio;
 
 pub use bytestr::ByteStr;
 pub use either::Either;
