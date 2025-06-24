@@ -1,4 +1,4 @@
-//! Collection of small utility types.
+//! Collection of utility types.
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
 #![warn(clippy::missing_inline_in_public_items)]
@@ -8,6 +8,8 @@ mod either;
 mod either_map;
 
 pub mod futures;
+pub mod io;
+
 #[cfg(feature = "tokio")]
 pub mod tokio;
 
