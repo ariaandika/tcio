@@ -173,12 +173,32 @@ impl IoStream {
 #[allow(clippy::missing_inline_in_public_items)]
 impl IoStream {
     /// Try to write a buffer to the stream, returning how many bytes were written.
+    ///
+    /// Returns [`Poll::Pending`] if the underlying stream not ready for writing.
     pub fn poll_write(&self, buf: &[u8], cx: &mut std::task::Context) -> Poll<io::Result<usize>> {
         match self.try_write(buf) {
             Ok(read) => Poll::Ready(Ok(read)),
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
                 tri!(ready!(self.poll_write_ready(cx)));
                 self.poll_write(buf, cx)
+            }
+            Err(err) => Poll::Ready(Err(err)),
+        }
+    }
+
+    /// Try to write a buffer to the stream, returning how many bytes were written.
+    ///
+    /// Returns [`Poll::Pending`] if the underlying stream not ready for writing.
+    pub fn poll_write_vectored(
+        &self,
+        bufs: &[io::IoSlice<'_>],
+        cx: &mut std::task::Context,
+    ) -> Poll<io::Result<usize>> {
+        match self.try_write_vectored(bufs) {
+            Ok(read) => Poll::Ready(Ok(read)),
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                tri!(ready!(self.poll_write_ready(cx)));
+                self.poll_write_vectored(bufs, cx)
             }
             Err(err) => Poll::Ready(Err(err)),
         }
@@ -200,6 +220,8 @@ impl IoStream {
     }
 
     /// Tries to write all data from the provided buffer into the stream, advancing buffer cursor.
+    ///
+    /// Returns [`Poll::Pending`] if the underlying stream not ready for writing.
     pub fn poll_write_all_buf<B>(&self, buf: &mut B) -> Poll<io::Result<()>>
     where
         B: bytes::Buf + ?Sized,
