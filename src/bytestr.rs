@@ -1,4 +1,4 @@
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 
 /// A cheaply cloneable and sliceable str.
 ///
@@ -97,6 +97,20 @@ impl ByteStr {
         }
     }
 
+    /// Clears the string, removing all data.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.bytes.clear();
+    }
+
+    /// Returns true if this is the only reference to the data.
+    ///
+    /// Always returns false if the data is backed by a static slice.
+    #[inline]
+    pub fn is_unique(&self) -> bool {
+        self.bytes.is_unique()
+    }
+
     /// Extracts a string slice containing the entire `ByteStr`.
     #[inline]
     pub fn as_str(&self) -> &str {
@@ -119,7 +133,9 @@ impl ByteStr {
         Self { bytes: Bytes::slice_ref(&self.bytes, subset.as_bytes()) }
     }
 
-    /// Consume `ByteStr` into [`String`].
+    /// Convert [`ByteStr`] into [`String`].
+    ///
+    /// The bytes move/copy behavior is depends on [`Into<Vec>`] implementation of [`Bytes`].
     #[inline]
     pub fn into_string(self) -> String {
         // SAFETY: invariant bytes is a valid utf8
@@ -135,13 +151,6 @@ impl ByteStr {
 
 // ===== Constructor =====
 // everything should be constructed from a valid ut8
-
-impl From<ByteStr> for Bytes {
-    #[inline]
-    fn from(value: ByteStr) -> Self {
-        value.into_bytes()
-    }
-}
 
 impl From<&'static str> for ByteStr {
     #[inline]
@@ -178,6 +187,29 @@ impl Default for ByteStr {
     #[inline]
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ===== Destructor =====
+
+impl From<ByteStr> for Bytes {
+    #[inline]
+    fn from(value: ByteStr) -> Self {
+        value.bytes
+    }
+}
+
+impl From<ByteStr> for BytesMut {
+    #[inline]
+    fn from(value: ByteStr) -> Self {
+        value.bytes.into()
+    }
+}
+
+impl From<ByteStr> for String {
+    #[inline]
+    fn from(value: ByteStr) -> Self {
+        value.into_string()
     }
 }
 
