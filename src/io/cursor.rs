@@ -47,3 +47,17 @@ impl<B> BufCursor<B> {
     }
 }
 
+
+impl<B: AsyncBufRead> AsyncBufRead for BufCursor<B> {
+    fn poll_read_fill(&mut self, cx: &mut std::task::Context) -> Poll<io::Result<usize>> {
+        self.io.poll_read_fill(cx)
+    }
+
+    fn chunk(&self) -> &[u8] {
+        &self.io.chunk()[self.read..]
+    }
+
+    fn consume(&mut self, cnt: usize) {
+        self.read += cnt;
+    }
+}
