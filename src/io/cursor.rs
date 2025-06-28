@@ -26,8 +26,9 @@ impl<B> BufCursor<B> {
     {
         loop {
             if self.io.chunk().len() >= self.read + len {
+                let read = self.read;
                 self.read += len;
-                return Poll::Ready(Ok(&self.io.chunk()[self.read..len]))
+                return Poll::Ready(Ok(&self.io.chunk()[read..read + len]))
             }
 
             ready!(self.io.poll_read_fill(cx)?);
