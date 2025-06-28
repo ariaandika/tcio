@@ -1,7 +1,5 @@
 //! Collection of utility types.
-#![warn(missing_docs)]
-#![warn(missing_debug_implementations)]
-#![warn(clippy::missing_inline_in_public_items)]
+#![warn(missing_docs, missing_debug_implementations)]
 
 mod bytestr;
 mod either;

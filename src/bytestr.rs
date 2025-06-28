@@ -80,7 +80,6 @@ impl ByteStr {
     /// assert!(text.try_mut(|e|e.make_ascii_lowercase()));
     /// assert_eq!(&text, "content-type");
     /// ```
-    #[allow(clippy::missing_inline_in_public_items)]
     pub fn try_mut<F: FnOnce(&mut str)>(&mut self, f: F) -> bool {
         match Bytes::try_into_mut(std::mem::take(&mut self.bytes)) {
             Ok(mut original) => {
@@ -241,14 +240,12 @@ impl std::ops::Deref for ByteStr {
 // ===== Others =====
 
 impl std::fmt::Display for ByteStr {
-    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self.as_str(), f)
     }
 }
 
 impl std::fmt::Debug for ByteStr {
-    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Debug::fmt(self.as_str(), f)
     }

@@ -37,7 +37,6 @@ where
 }
 
 impl<L, R> Either<L, R> {
-    #[inline]
     fn project<'p>(self: Pin<&'p mut Self>) -> EitherProject<'p, L, R> {
         // SAFETY: self is pinned
         // no `Drop`, nor manual `Unpin` implementation.
@@ -68,7 +67,6 @@ impl<L: Future, R: Future<Output = L::Output>> Future for Either<L, R> {
 // ===== Either traits =====
 
 impl<L: fmt::Display, R: fmt::Display> fmt::Display for Either<L, R> {
-    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Left(l) => l.fmt(f),

@@ -26,7 +26,6 @@ enum Repr {
 }
 
 impl std::fmt::Debug for IoStream {
-    #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.repr {
             Repr::Tcp(t) => f.debug_tuple("IoStream").field(t).finish(),

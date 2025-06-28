@@ -1,4 +1,3 @@
-#![allow(clippy::missing_inline_in_public_items)]
 use std::{
     io,
     task::{Poll, ready},

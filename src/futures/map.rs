@@ -40,7 +40,6 @@ where
 {
     type Output = O;
 
-    #[inline]
     fn poll(
         self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,

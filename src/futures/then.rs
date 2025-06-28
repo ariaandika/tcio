@@ -48,7 +48,6 @@ where
 {
     type Output = F2::Output;
 
-    #[inline]
     fn poll(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,

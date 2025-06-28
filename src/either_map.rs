@@ -35,7 +35,6 @@ where
 }
 
 impl<L, R> EitherMap<L, R> {
-    #[inline]
     fn project<'p>(self: Pin<&'p mut Self>) -> EitherMapProject<'p, L, R> {
         // SAFETY: self is pinned
         // no `Drop`, nor manual `Unpin` implementation.
@@ -69,7 +68,6 @@ impl<L: Future, R: Future> Future for EitherMap<L, R> {
 // reference either type inside function is not possible.
 
 impl<L: fmt::Display, R: fmt::Display> fmt::Display for EitherMap<L, R> {
-    #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Left(l) => l.fmt(f),
