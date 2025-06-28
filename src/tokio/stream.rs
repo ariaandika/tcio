@@ -1,4 +1,3 @@
-//! Integration with [`tokio`] crate.
 use std::{io, pin::Pin, task::Poll};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -16,9 +15,24 @@ use crate::{
 /// Wrapper for either tokio [`TcpStream`] or [`UnixStream`][tokio::net::UnixStream].
 ///
 /// IO Operation provided via [`AsyncIo`].
-#[derive(Debug)]
 pub struct IoStream {
     repr: Repr,
+}
+
+enum Repr {
+    Tcp(TcpStream),
+    #[cfg(unix)]
+    Unix(UnixStream),
+}
+
+impl std::fmt::Debug for IoStream {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.repr {
+            Repr::Tcp(t) => f.debug_tuple("IoStream").field(t).finish(),
+            Repr::Unix(u) => f.debug_tuple("IoStream").field(u).finish(),
+        }
+    }
 }
 
 impl IoStream {
@@ -67,14 +81,7 @@ impl From<UnixStream> for IoStream {
     }
 }
 
-#[derive(Debug)]
-enum Repr {
-    Tcp(TcpStream),
-    #[cfg(unix)]
-    Unix(UnixStream),
-}
-
-// ===== Readiness =====
+// ===== AsyncIo =====
 
 impl AsyncIoRead for IoStream {
     #[inline]
@@ -142,6 +149,8 @@ impl AsyncIoWrite for IoStream {
         }
     }
 }
+
+// ===== Tokio::io =====
 
 impl AsyncRead for IoStream {
     #[inline]
