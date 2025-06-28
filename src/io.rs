@@ -5,13 +5,10 @@ use std::{
     task::{Poll, ready},
 };
 
-/// Asynchronous io operation.
-pub trait AsyncIo {
+/// Asynchronous io read operation.
+pub trait AsyncIoRead {
     /// Polls for read readiness.
     fn poll_read_ready(&self, cx: &mut std::task::Context) -> Poll<io::Result<()>>;
-
-    /// Polls for write readiness.
-    fn poll_write_ready(&self, cx: &mut std::task::Context) -> Poll<io::Result<()>>;
 
     /// Tries to read data from the stream into the provided buffer, returning how many bytes were
     /// read.
@@ -20,17 +17,6 @@ pub trait AsyncIo {
     /// Tries to read data from the stream into the provided buffers, returning how many bytes were
     /// read.
     fn try_read_vectored(&self, bufs: &mut [io::IoSliceMut<'_>]) -> io::Result<usize>;
-
-    /// Try to write a buffer to the stream, returning how many bytes were written.
-    fn try_write(&self, buf: &[u8]) -> io::Result<usize>;
-
-    /// Try to write a buffer to the stream, returning how many bytes were written.
-    fn try_write_vectored(&self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize>;
-
-    /// Returns `true` if the underlying io support vectored write.
-    fn is_write_vectored(&self) -> bool;
-
-    // ===== IO Read =====
 
     /// Tries to read data from the stream into the provided buffer, returning how many bytes were
     /// read.
@@ -84,7 +70,21 @@ pub trait AsyncIo {
         Poll::Ready(Ok(read))
     }
 
-    // ===== IO Write =====
+}
+
+/// Asynchronous io write operation.
+pub trait AsyncIoWrite {
+    /// Polls for write readiness.
+    fn poll_write_ready(&self, cx: &mut std::task::Context) -> Poll<io::Result<()>>;
+
+    /// Try to write a buffer to the stream, returning how many bytes were written.
+    fn try_write(&self, buf: &[u8]) -> io::Result<usize>;
+
+    /// Try to write a buffer to the stream, returning how many bytes were written.
+    fn try_write_vectored(&self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize>;
+
+    /// Returns `true` if the underlying io support vectored write.
+    fn is_write_vectored(&self) -> bool;
 
     /// Try to write a buffer to the stream, returning how many bytes were written.
     ///
@@ -177,20 +177,12 @@ use tri;
 mod tokio_io {
     use super::*;
 
-    use tokio::{
-        io::AsyncWrite,
-        net::{TcpStream, UnixStream},
-    };
+    use tokio::{io::AsyncWrite, net::TcpStream};
 
-    impl AsyncIo for TcpStream {
+    impl AsyncIoRead for TcpStream {
         #[inline]
         fn poll_read_ready(&self, cx: &mut std::task::Context) -> Poll<io::Result<()>> {
             self.poll_read_ready(cx)
-        }
-
-        #[inline]
-        fn poll_write_ready(&self, cx: &mut std::task::Context) -> Poll<io::Result<()>> {
-            self.poll_write_ready(cx)
         }
 
         #[inline]
@@ -201,6 +193,13 @@ mod tokio_io {
         #[inline]
         fn try_read_vectored(&self, bufs: &mut [io::IoSliceMut<'_>]) -> io::Result<usize> {
             self.try_read_vectored(bufs)
+        }
+    }
+
+    impl AsyncIoWrite for TcpStream {
+        #[inline]
+        fn poll_write_ready(&self, cx: &mut std::task::Context) -> Poll<io::Result<()>> {
+            self.poll_write_ready(cx)
         }
 
         #[inline]
@@ -219,40 +218,48 @@ mod tokio_io {
         }
     }
 
-    impl AsyncIo for UnixStream {
-        #[inline]
-        fn poll_read_ready(&self, cx: &mut std::task::Context) -> Poll<io::Result<()>> {
-            self.poll_read_ready(cx)
+    #[cfg(unix)]
+    mod unix {
+        use super::*;
+        use tokio::net::UnixStream;
+
+        impl AsyncIoRead for UnixStream {
+            #[inline]
+            fn poll_read_ready(&self, cx: &mut std::task::Context) -> Poll<io::Result<()>> {
+                self.poll_read_ready(cx)
+            }
+
+            #[inline]
+            fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
+                self.try_read(buf)
+            }
+
+            #[inline]
+            fn try_read_vectored(&self, bufs: &mut [io::IoSliceMut<'_>]) -> io::Result<usize> {
+                self.try_read_vectored(bufs)
+            }
         }
 
-        #[inline]
-        fn poll_write_ready(&self, cx: &mut std::task::Context) -> Poll<io::Result<()>> {
-            self.poll_write_ready(cx)
-        }
+        impl AsyncIoWrite for UnixStream {
+            #[inline]
+            fn poll_write_ready(&self, cx: &mut std::task::Context) -> Poll<io::Result<()>> {
+                self.poll_write_ready(cx)
+            }
 
-        #[inline]
-        fn try_read(&self, buf: &mut [u8]) -> io::Result<usize> {
-            self.try_read(buf)
-        }
+            #[inline]
+            fn try_write(&self, buf: &[u8]) -> io::Result<usize> {
+                self.try_write(buf)
+            }
 
-        #[inline]
-        fn try_read_vectored(&self, bufs: &mut [io::IoSliceMut<'_>]) -> io::Result<usize> {
-            self.try_read_vectored(bufs)
-        }
+            #[inline]
+            fn try_write_vectored(&self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
+                self.try_write_vectored(bufs)
+            }
 
-        #[inline]
-        fn try_write(&self, buf: &[u8]) -> io::Result<usize> {
-            self.try_write(buf)
-        }
-
-        #[inline]
-        fn try_write_vectored(&self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
-            self.try_write_vectored(bufs)
-        }
-
-        #[inline]
-        fn is_write_vectored(&self) -> bool {
-            AsyncWrite::is_write_vectored(self)
+            #[inline]
+            fn is_write_vectored(&self) -> bool {
+                AsyncWrite::is_write_vectored(self)
+            }
         }
     }
 }
