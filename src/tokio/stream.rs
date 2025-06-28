@@ -14,7 +14,7 @@ use crate::{
 
 /// Wrapper for either tokio [`TcpStream`] or [`UnixStream`][tokio::net::UnixStream].
 ///
-/// IO Operation provided via [`AsyncIo`].
+/// IO Operation provided via [`AsyncIoRead`] and [`AsyncIoWrite`].
 pub struct IoStream {
     repr: Repr,
 }
