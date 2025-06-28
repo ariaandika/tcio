@@ -63,7 +63,7 @@ impl<IO> BufReader<IO> {
 
 impl<IO> AsyncBufRead for BufReader<IO>
 where
-    IO: AsyncIoRead + Unpin
+    IO: AsyncIoRead
 {
     #[inline]
     fn poll_read_fill(&mut self, cx: &mut std::task::Context) -> Poll<io::Result<usize>> {
