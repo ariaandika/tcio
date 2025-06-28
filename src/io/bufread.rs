@@ -26,6 +26,20 @@ pub trait AsyncBufRead {
     fn consume(&mut self, cnt: usize);
 }
 
+impl<T: AsyncBufRead> AsyncBufRead for &mut T {
+    fn poll_read_fill(&mut self, cx: &mut std::task::Context) -> Poll<io::Result<usize>> {
+        T::poll_read_fill(self, cx)
+    }
+
+    fn chunk(&self) -> &[u8] {
+        T::chunk(self)
+    }
+
+    fn consume(&mut self, cnt: usize) {
+        T::consume(self, cnt);
+    }
+}
+
 /// An implementation of [`AsyncBufRead`] with given [`AsyncIoRead`].
 #[derive(Debug)]
 pub struct BufReader<IO> {
