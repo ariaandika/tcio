@@ -22,7 +22,7 @@ fn main() -> io::Result<()> {
 
             let mut io = BufReader::new(io);
 
-            poll_fn(|cx| parse(&mut io, cx)).await?;
+            poll_fn(|cx| poll_parse(&mut io, cx)).await?;
 
             assert!(io.chunk().is_empty());
 
@@ -31,18 +31,36 @@ fn main() -> io::Result<()> {
     })
 }
 
-fn parse<B: AsyncBufRead>(io: B, cx: &mut std::task::Context) -> Poll<io::Result<()>> {
+fn poll_parse<B: AsyncBufRead>(io: B, cx: &mut std::task::Context) -> Poll<io::Result<()>> {
     let mut cursor = BufCursor::new(io);
 
     let chunk = ready!(cursor.poll_get(3, cx)?);
-
     assert_eq!(chunk, b"Foo");
 
-    let chunk = ready!(cursor.poll_get(3, cx)?);
+    ready!(poll_parse_uncommit(&mut cursor, cx)?);
 
+    let chunk = ready!(cursor.poll_get(3, cx)?);
     assert_eq!(chunk, b"Bar");
 
+    let chunk = ready!(cursor.poll_get(3, cx)?);
+    assert_eq!(chunk, b"Baz");
+
+    let chunk = ready!(cursor.poll_get(3, cx)?);
+    assert_eq!(chunk, b"Buf");
+
     cursor.commit();
+
+    Poll::Ready(Ok(()))
+}
+
+fn poll_parse_uncommit<B: AsyncBufRead>(io: B, cx: &mut std::task::Context) -> Poll<io::Result<()>> {
+    let mut cursor = BufCursor::new(io);
+
+    let chunk = ready!(cursor.poll_get(3, cx)?);
+    assert_eq!(chunk, b"Bar");
+
+    let chunk = ready!(cursor.poll_get(3, cx)?);
+    assert_eq!(chunk, b"Baz");
 
     Poll::Ready(Ok(()))
 }
@@ -53,8 +71,12 @@ fn client() -> Result<(), io::Error> {
     let mut io = TcpStream::connect("0.0.0.0:3000")?;
 
     io.write_all(b"Foo")?;
-
+    sleep(Duration::from_millis(10));
     io.write_all(b"Bar")?;
+    sleep(Duration::from_millis(10));
+    io.write_all(b"Baz")?;
+    sleep(Duration::from_millis(10));
+    io.write_all(b"Buf")?;
 
     Ok(())
 }
