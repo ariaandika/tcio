@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## v0.1.2
+
+### Added
+
+- add `range_of` and `slice_of_bytes` function
+
+## v0.1.1
+
 ### Added
 
 - add `try_mut` method
