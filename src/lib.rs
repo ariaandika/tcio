@@ -8,6 +8,7 @@ mod either_map;
 
 pub mod futures;
 pub mod io;
+pub mod fmt;
 
 #[cfg(feature = "tokio")]
 pub mod tokio;
