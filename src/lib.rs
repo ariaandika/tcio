@@ -12,7 +12,7 @@ pub mod io;
 #[cfg(feature = "tokio")]
 pub mod tokio;
 
-pub use slice::{range_of, slice_of_bytes};
+pub use slice::{range_of, slice_of_bytes, slice_of};
 pub use bytestr::ByteStr;
 pub use either::Either;
 pub use either_map::EitherMap;

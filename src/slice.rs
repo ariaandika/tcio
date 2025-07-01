@@ -98,3 +98,50 @@ pub fn slice_of_bytes(range: std::ops::Range<usize>, bytes: &Bytes) -> Bytes {
     bytes.slice(offset..offset + sub_len)
 }
 
+/// Returns the subset value in `buf` with returned range from [`range_of`].
+///
+/// # Examples
+///
+/// ```
+/// use tcio::{range_of, slice_of};
+///
+/// let mut bytes = b"Content-Type: text/html";
+/// let range = range_of(&bytes[14..]);
+///
+/// let content = slice_of(range, bytes);
+///
+/// assert_eq!(content, &b"text/html"[..]);
+/// ```
+pub fn slice_of(range: std::ops::Range<usize>, buf: &[u8]) -> &[u8] {
+    let buf_p = buf.as_ptr() as usize;
+    let buf_len = buf.as_ptr() as usize;
+    let sub_p = range.start;
+    let sub_len = range.end.saturating_sub(range.start);
+
+    if sub_len == 0 {
+        return &[]
+    }
+
+    assert!(
+        sub_p >= buf_p,
+        "range pointer ({:p}) is smaller than `buf` pointer ({:p})",
+        sub_p as *const u8,
+        buf.as_ptr(),
+    );
+    assert!(
+        sub_p + sub_len <= buf_p + buf_len,
+        "subset is out of bounds: self = ({:p}, {}), subset = ({:p}, {})",
+        buf.as_ptr(),
+        buf_len,
+        sub_p as *const u8,
+        sub_len,
+    );
+
+    let offset = sub_p.saturating_sub(buf_p);
+
+    // SAFETY:
+    // - sub_p >= buf_p
+    // - sub_p + sub_len <= buf_p + buf_len
+    unsafe { buf.get_unchecked(offset..offset + sub_len) }
+}
+
