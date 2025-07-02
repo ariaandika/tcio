@@ -59,6 +59,24 @@ impl<IO> BufReader<IO> {
     pub fn with_capacity(io: IO, capacity: usize) -> Self {
         Self { io, buf: BytesMut::with_capacity(capacity) }
     }
+
+    /// Returns a byte slice of the internal buffer.
+    #[inline]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.buf
+    }
+
+    /// Returns reference to the underlying buffer.
+    #[inline]
+    pub fn bufffer(&self) -> &BytesMut {
+        &self.buf
+    }
+
+    /// Returns mutable reference to the underlying buffer.
+    #[inline]
+    pub fn bufffer_mut(&mut self) -> &mut BytesMut {
+        &mut self.buf
+    }
 }
 
 impl<IO> AsyncBufRead for BufReader<IO>
@@ -72,7 +90,7 @@ where
 
     #[inline]
     fn chunk(&self) -> &[u8] {
-        &self.buf
+        self.as_bytes()
     }
 
     #[inline]
