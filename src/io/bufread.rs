@@ -77,6 +77,18 @@ impl<IO> BufReader<IO> {
     pub fn bufffer_mut(&mut self) -> &mut BytesMut {
         &mut self.buf
     }
+
+    /// Returns reference to the underlying io.
+    #[inline]
+    pub fn inner(&self) -> &IO {
+        &self.io
+    }
+
+    /// Returns mutable reference to the underlying io.
+    #[inline]
+    pub fn inner_mut(&mut self) -> &mut IO {
+        &mut self.io
+    }
 }
 
 impl<IO> AsyncBufRead for BufReader<IO>
