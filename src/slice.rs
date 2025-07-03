@@ -150,14 +150,13 @@ pub fn slice_of(range: std::ops::Range<usize>, buf: &[u8]) -> &[u8] {
 
 /// Raw bytes cursor.
 ///
-/// Provides an API for bytes reading, with unsafe methods which skip bounds checking.
+/// Provides an API for bytes reading, with unsafe methods that skip bounds checking.
 #[derive(Debug)]
 pub struct Cursor<'a> {
     // point to the first element
     start: *const u8,
-    // point to the last element,
-    // so its inclusive
-    end: *const u8,
+    // point to one after last element,
+    end: usize,
     _p: std::marker::PhantomData<&'a ()>,
 }
 
@@ -167,8 +166,7 @@ impl<'a> Cursor<'a> {
     pub fn new(buf: &'a [u8]) -> Self {
         Self {
             start: buf.as_ptr(),
-            // SAFETY: points to the last element (inclusive)
-            end: unsafe { buf.as_ptr().add(buf.len() - 1) },
+            end: buf.as_ptr() as usize + buf.len(),
             _p: std::marker::PhantomData,
         }
     }
@@ -176,7 +174,7 @@ impl<'a> Cursor<'a> {
     /// Returns the remaining bytes length.
     #[inline]
     pub fn remaining(&self) -> usize {
-        self.end as usize + 1 - self.start as usize
+        self.end - self.start as usize
     }
 
     /// Returns `true` if there is more bytes left.
@@ -188,14 +186,14 @@ impl<'a> Cursor<'a> {
     /// Returns the current bytes.
     #[inline]
     pub fn as_bytes(&self) -> &'a [u8] {
-        unsafe { std::slice::from_raw_parts(self.start, self.end as usize + 1 - self.start as usize) }
+        unsafe { std::slice::from_raw_parts(self.start, self.remaining()) }
     }
 
     /// Try get the first byte.
     #[inline]
     pub fn first(&self) -> Option<u8> {
-        if self.start <= self.end {
-            // SAFETY: start is not yet pass the last element
+        if (self.start as usize) < self.end {
+            // SAFETY: start is still in bounds
             Some(unsafe { *self.start })
         } else {
             None
@@ -205,8 +203,8 @@ impl<'a> Cursor<'a> {
     /// Try get the first `N`-th bytes.
     #[inline]
     pub fn first_chunk<const N: usize>(&self) -> Option<&[u8; N]> {
-        if (self.start as usize) + N <= self.end as usize + 1 {
-            // SAFETY: start + N is not yet pass the last element
+        if (self.start as usize) + N <= self.end {
+            // SAFETY: start + N is still in bounds
             Some(unsafe { &*self.start.cast() })
         } else {
             None
@@ -221,7 +219,7 @@ impl<'a> Cursor<'a> {
     #[inline]
     pub unsafe fn advance(&mut self, n: usize) {
         debug_assert!(
-            (self.start as usize) + n <= (self.end as usize) + 1,
+            (self.start as usize) + n <= self.end,
             "`Cursor::advance` safety violated, advancing `n` is out of bounds"
         );
         unsafe { self.start = self.start.add(n) };
@@ -255,5 +253,11 @@ fn test_cursor() {
 
     assert!(cursor.first().is_none());
     assert!(cursor.first_chunk::<5>().is_none());
+
+    // empty buffer
+    let cursor = Cursor::new(b"");
+    assert!(!cursor.has_remaining());
+    assert_eq!(cursor.first(), None);
+    assert_eq!(cursor.first_chunk::<2>(), None);
 }
 
