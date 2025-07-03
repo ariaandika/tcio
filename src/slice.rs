@@ -211,7 +211,37 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    /// Advance forward, discarding the first `n`-th bytes.
+    /// Try get the first byte, and advance the cursor by `1`.
+    #[inline]
+    pub fn pop_front(&mut self) -> Option<u8> {
+        if (self.start as usize) < self.end {
+            // SAFETY: start is still in bounds
+            unsafe {
+                let val = *self.start;
+                self.advance(1);
+                Some(val)
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Try get the first `N`-th bytes, and advance the cursor by `N`.
+    #[inline]
+    pub fn pop_chunk_front<const N: usize>(&mut self) -> Option<&[u8; N]> {
+        if (self.start as usize) + N <= self.end {
+            // SAFETY: start + N is still in bounds
+            unsafe {
+                let val = &*self.start.cast();
+                self.advance(N);
+                Some(val)
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Advance cursor, discarding the first `n`-th bytes.
     ///
     /// # Safety
     ///
