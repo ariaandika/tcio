@@ -254,6 +254,16 @@ impl<'a> Cursor<'a> {
         );
         unsafe { self.start = self.start.add(n) };
     }
+
+    /// Move cursor backwards cursor.
+    ///
+    /// # Safety
+    ///
+    /// Must not step back pass the first slice element.
+    #[inline]
+    pub unsafe fn step_back(&mut self, n: usize) {
+        unsafe { self.start = self.start.sub(n) };
+    }
 }
 
 impl Iterator for Cursor<'_> {
