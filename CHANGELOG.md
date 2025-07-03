@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- add `slice_of` funtion
+- add formatting utility
+- add `as_bytes`, `buffer`, and `buffer_mut` method of BufReader
+- add `inner` and `inner_mut` method of BufReader
+- add `Cursor` struct
+
 ## v0.1.2
 
 ### Added
