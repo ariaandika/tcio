@@ -276,37 +276,90 @@ impl ExactSizeIterator for Cursor<'_> {
 }
 
 #[test]
-fn test_cursor() {
-    let bytes = &b"Content-Type"[..];
-    let mut cursor = Cursor::new(bytes);
+fn test_cursor_advance() {
+    const BUF: [u8; 12] = *b"Content-Type";
+    const BUF_LEN: usize = BUF.len();
+
+    let mut cursor = Cursor::new(&BUF[..]);
+
+    assert_eq!(cursor.remaining(), BUF.len());
+    assert_eq!(cursor.as_bytes(), BUF);
 
     assert_eq!(cursor.first(), Some(b'C'));
+    assert_eq!(cursor.first_chunk::<0>(), Some(b""));
     assert_eq!(cursor.first_chunk::<2>(), Some(b"Co"));
+    assert_eq!(cursor.first_chunk::<13>(), None);
 
     // SAFETY: checked with `first_chunk::<2>`
     unsafe { cursor.advance(2) };
 
-    assert_eq!(cursor.remaining(), "Content-Type".len() - 2);
-    assert_eq!(cursor.as_bytes(), b"ntent-Type");
+    const REST: [u8; 10] = *b"ntent-Type";
+    const REST_LEN: usize = REST.len();
 
-    const REST: usize = "ntent-Type".len();
-    const OOB: usize = "ntent-Type".len() + 1;
+    assert_eq!(cursor.remaining(), REST_LEN);
+    assert_eq!(cursor.as_bytes(), REST);
 
     assert_eq!(cursor.first(), Some(b'n'));
     assert_eq!(cursor.first_chunk::<0>(), Some(b""));
-    assert_eq!(cursor.first_chunk::<REST>(), Some(b"ntent-Type"));
-    assert_eq!(cursor.first_chunk::<OOB>(), None);
+    assert_eq!(cursor.first_chunk::<REST_LEN>(), Some(&REST));
+    assert_eq!(cursor.first_chunk::<BUF_LEN>(), None);
 
-    // SAFETY: checked with `first_chunk::<REST>`
-    unsafe { cursor.advance(REST) };
+    // SAFETY: checked with `first_chunk::<REST_LEN>`
+    unsafe { cursor.advance(REST_LEN) };
 
+    assert!(!cursor.has_remaining());
     assert!(cursor.first().is_none());
     assert!(cursor.first_chunk::<5>().is_none());
+    assert_eq!(cursor.as_bytes(), b"");
 
     // empty buffer
     let cursor = Cursor::new(b"");
     assert!(!cursor.has_remaining());
-    assert_eq!(cursor.first(), None);
-    assert_eq!(cursor.first_chunk::<2>(), None);
+    assert!(cursor.first().is_none());
+    assert!(cursor.first_chunk::<2>().is_none());
 }
 
+#[test]
+fn test_cursor_pop_front() {
+    const BUF: [u8; 12] = *b"Content-Type";
+    const BUF_LEN: usize = BUF.len();
+
+    let bytes = &BUF[..];
+    let mut cursor = Cursor::new(bytes);
+
+    assert_eq!(cursor.remaining(), BUF.len());
+    assert_eq!(cursor.as_bytes(), BUF);
+
+    assert_eq!(cursor.first(), Some(b'C'));
+    assert_eq!(cursor.first_chunk::<0>(), Some(b""));
+    assert_eq!(cursor.first_chunk::<2>(), Some(b"Co"));
+    assert_eq!(cursor.first_chunk::<13>(), None);
+
+    assert_eq!(cursor.pop_front(), Some(b'C'));
+    assert_eq!(cursor.pop_front(), Some(b'o'));
+
+    const REST: [u8; 10] = *b"ntent-Type";
+    const REST_LEN: usize = REST.len();
+
+    assert_eq!(cursor.remaining(), REST_LEN);
+    assert_eq!(cursor.as_bytes(), REST);
+
+    assert_eq!(cursor.first(), Some(b'n'));
+    assert_eq!(cursor.first_chunk::<0>(), Some(b""));
+    assert_eq!(cursor.first_chunk::<REST_LEN>(), Some(&REST));
+    assert_eq!(cursor.first_chunk::<BUF_LEN>(), None);
+
+    assert_eq!(cursor.pop_chunk_front::<REST_LEN>(), Some(&REST));
+
+    assert!(!cursor.has_remaining());
+    assert!(cursor.first().is_none());
+    assert!(cursor.first_chunk::<5>().is_none());
+    assert_eq!(cursor.as_bytes(), b"");
+
+    // empty buffer
+    let mut cursor = Cursor::new(b"");
+    assert!(!cursor.has_remaining());
+    assert!(cursor.pop_front().is_none());
+    assert!(cursor.pop_chunk_front::<2>().is_none());
+    assert_eq!(cursor.as_bytes(), b"");
+}
