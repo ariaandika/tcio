@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## v0.1.3
+
 ### Added
 
 - add `slice_of` funtion

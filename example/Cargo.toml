@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-tcio = { version = "0.1.0", path = "..", features = ["tokio"] }
+tcio = { version = "0.1.3", path = "..", features = ["tokio"] }
 tokio = { version = "1.45.1", features = ["net", "rt-multi-thread"] }
 
 [[bin]]
