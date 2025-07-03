@@ -256,6 +256,25 @@ impl<'a> Cursor<'a> {
     }
 }
 
+impl Iterator for Cursor<'_> {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.pop_front()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let len = self.remaining();
+        (len, Some(len))
+    }
+}
+
+impl ExactSizeIterator for Cursor<'_> {
+    fn len(&self) -> usize {
+        self.remaining()
+    }
+}
+
 #[test]
 fn test_cursor() {
     let bytes = &b"Content-Type"[..];
