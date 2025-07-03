@@ -1,3 +1,4 @@
+//! raw bytes utilities.
 use bytes::Bytes;
 
 macro_rules! example_range {
@@ -6,7 +7,7 @@ r#"# Examples
 
 ```
 # use bytes::{BytesMut, Bytes};
-use tcio::{range_of, slice_of_bytes};
+use tcio::slice::{range_of, slice_of_bytes};
 
 let mut bytesm = BytesMut::from(&b"Content-Type: text/html"[..]);
 let range = range_of(&bytesm[14..]);
@@ -55,7 +56,7 @@ pub fn range_of(buf: &[u8]) -> std::ops::Range<usize> {
 ///
 /// ```should_panic
 /// # use bytes::{BytesMut, Bytes};
-/// use tcio::{range_of, slice_of_bytes};
+/// use tcio::slice::{range_of, slice_of_bytes};
 ///
 /// let mut bytesm = BytesMut::from(&b"Content-Type: text/html"[..]);
 /// let range = range_of(&bytesm[14..]);
@@ -103,7 +104,7 @@ pub fn slice_of_bytes(range: std::ops::Range<usize>, bytes: &Bytes) -> Bytes {
 /// # Examples
 ///
 /// ```
-/// use tcio::{range_of, slice_of};
+/// use tcio::slice::{range_of, slice_of};
 ///
 /// let mut bytes = b"Content-Type: text/html";
 /// let range = range_of(&bytes[14..]);
@@ -143,5 +144,116 @@ pub fn slice_of(range: std::ops::Range<usize>, buf: &[u8]) -> &[u8] {
     // - sub_p >= buf_p
     // - sub_p + sub_len <= buf_p + buf_len
     unsafe { buf.get_unchecked(offset..offset + sub_len) }
+}
+
+// ===== Cursor =====
+
+/// Raw bytes cursor.
+///
+/// Provides an API for bytes reading, with unsafe methods which skip bounds checking.
+#[derive(Debug)]
+pub struct Cursor<'a> {
+    // point to the first element
+    start: *const u8,
+    // point to the last element,
+    // so its inclusive
+    end: *const u8,
+    _p: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a> Cursor<'a> {
+    /// Create new [`Cursor`] from an initialized buffer.
+    #[inline]
+    pub fn new(buf: &'a [u8]) -> Self {
+        Self {
+            start: buf.as_ptr(),
+            // SAFETY: points to the last element (inclusive)
+            end: unsafe { buf.as_ptr().add(buf.len() - 1) },
+            _p: std::marker::PhantomData,
+        }
+    }
+
+    /// Returns the remaining bytes length.
+    #[inline]
+    pub fn remaining(&self) -> usize {
+        self.end as usize + 1 - self.start as usize
+    }
+
+    /// Returns `true` if there is more bytes left.
+    #[inline]
+    pub fn has_remaining(&self) -> bool {
+        self.remaining() != 0
+    }
+
+    /// Returns the current bytes.
+    #[inline]
+    pub fn as_bytes(&self) -> &'a [u8] {
+        unsafe { std::slice::from_raw_parts(self.start, self.end as usize + 1 - self.start as usize) }
+    }
+
+    /// Try get the first byte.
+    #[inline]
+    pub fn first(&self) -> Option<u8> {
+        if self.start <= self.end {
+            // SAFETY: start is not yet pass the last element
+            Some(unsafe { *self.start })
+        } else {
+            None
+        }
+    }
+
+    /// Try get the first `N`-th bytes.
+    #[inline]
+    pub fn first_chunk<const N: usize>(&self) -> Option<&[u8; N]> {
+        if (self.start as usize) + N <= self.end as usize + 1 {
+            // SAFETY: start + N is not yet pass the last element
+            Some(unsafe { &*self.start.cast() })
+        } else {
+            None
+        }
+    }
+
+    /// Advance forward, discarding the first `n`-th bytes.
+    ///
+    /// # Safety
+    ///
+    /// Must not advance pass slice length.
+    #[inline]
+    pub unsafe fn advance(&mut self, n: usize) {
+        debug_assert!(
+            (self.start as usize) + n <= (self.end as usize) + 1,
+            "`Cursor::advance` safety violated, advancing `n` is out of bounds"
+        );
+        unsafe { self.start = self.start.add(n) };
+    }
+}
+
+#[test]
+fn test_cursor() {
+    let bytes = &b"Content-Type"[..];
+    let mut cursor = Cursor::new(bytes);
+
+    assert_eq!(cursor.first(), Some(b'C'));
+    assert_eq!(cursor.first_chunk::<2>(), Some(b"Co"));
+
+    // SAFETY: checked with `first_chunk::<2>`
+    unsafe { cursor.advance(2) };
+
+    assert_eq!(cursor.remaining(), "Content-Type".len() - 2);
+    assert_eq!(cursor.as_bytes(), b"ntent-Type");
+
+    const REST: usize = "ntent-Type".len();
+    const OOB: usize = "ntent-Type".len() + 1;
+
+    assert_eq!(cursor.first(), Some(b'n'));
+    assert_eq!(cursor.first_chunk::<0>(), Some(b""));
+    assert_eq!(cursor.first_chunk::<REST>(), Some(b"ntent-Type"));
+    assert_eq!(cursor.first_chunk::<OOB>(), None);
+
+    // SAFETY: checked with `first_chunk::<REST>`
+    unsafe { cursor.advance(REST) };
+
+    assert!(cursor.first().is_none());
+    assert!(cursor.first_chunk::<5>().is_none());
 }
 

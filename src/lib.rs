@@ -1,7 +1,7 @@
 //! Collection of utility types.
 #![warn(missing_docs, missing_debug_implementations)]
 
-mod slice;
+pub mod slice;
 mod bytestr;
 mod either;
 mod either_map;
@@ -13,7 +13,6 @@ pub mod fmt;
 #[cfg(feature = "tokio")]
 pub mod tokio;
 
-pub use slice::{range_of, slice_of_bytes, slice_of};
 pub use bytestr::ByteStr;
 pub use either::Either;
 pub use either_map::EitherMap;
