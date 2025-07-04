@@ -153,9 +153,8 @@ pub fn slice_of(range: std::ops::Range<usize>, buf: &[u8]) -> &[u8] {
 /// Provides an API for bytes reading, with unsafe methods that skip bounds checking.
 #[derive(Debug)]
 pub struct Cursor<'a> {
-    // point to the first element
     start: *const u8,
-    // point to one after last element,
+    cursor: *const u8,
     end: usize,
     _p: std::marker::PhantomData<&'a ()>,
 }
@@ -166,15 +165,22 @@ impl<'a> Cursor<'a> {
     pub fn new(buf: &'a [u8]) -> Self {
         Self {
             start: buf.as_ptr(),
+            cursor: buf.as_ptr(),
             end: buf.as_ptr() as usize + buf.len(),
             _p: std::marker::PhantomData,
         }
     }
 
+    /// Returns how many [`Cursor`] has step forward.
+    #[inline]
+    pub fn step(&self) -> usize {
+        (self.cursor as usize) - (self.start as usize)
+    }
+
     /// Returns the remaining bytes length.
     #[inline]
     pub fn remaining(&self) -> usize {
-        self.end - self.start as usize
+        self.end - self.cursor as usize
     }
 
     /// Returns `true` if there is more bytes left.
@@ -183,18 +189,24 @@ impl<'a> Cursor<'a> {
         self.remaining() != 0
     }
 
-    /// Returns the current bytes.
+    /// Returns the original bytes.
+    #[inline]
+    pub fn original(&self) -> &'a [u8] {
+        unsafe { std::slice::from_raw_parts(self.start, self.end - self.start as usize) }
+    }
+
+    /// Returns the remaining bytes.
     #[inline]
     pub fn as_bytes(&self) -> &'a [u8] {
-        unsafe { std::slice::from_raw_parts(self.start, self.remaining()) }
+        unsafe { std::slice::from_raw_parts(self.cursor, self.end - self.cursor as usize) }
     }
 
     /// Try get the first byte.
     #[inline]
     pub fn first(&self) -> Option<u8> {
-        if (self.start as usize) < self.end {
+        if (self.cursor as usize) < self.end {
             // SAFETY: start is still in bounds
-            Some(unsafe { *self.start })
+            Some(unsafe { *self.cursor })
         } else {
             None
         }
@@ -203,9 +215,9 @@ impl<'a> Cursor<'a> {
     /// Try get the first `N`-th bytes.
     #[inline]
     pub fn first_chunk<const N: usize>(&self) -> Option<&[u8; N]> {
-        if (self.start as usize) + N <= self.end {
+        if (self.cursor as usize) + N <= self.end {
             // SAFETY: start + N is still in bounds
-            Some(unsafe { &*self.start.cast() })
+            Some(unsafe { &*self.cursor.cast() })
         } else {
             None
         }
@@ -214,10 +226,10 @@ impl<'a> Cursor<'a> {
     /// Try get the first byte, and advance the cursor by `1`.
     #[inline]
     pub fn pop_front(&mut self) -> Option<u8> {
-        if (self.start as usize) < self.end {
+        if (self.cursor as usize) < self.end {
             // SAFETY: start is still in bounds
             unsafe {
-                let val = *self.start;
+                let val = *self.cursor;
                 self.advance(1);
                 Some(val)
             }
@@ -229,10 +241,10 @@ impl<'a> Cursor<'a> {
     /// Try get the first `N`-th bytes, and advance the cursor by `N`.
     #[inline]
     pub fn pop_chunk_front<const N: usize>(&mut self) -> Option<&[u8; N]> {
-        if (self.start as usize) + N <= self.end {
+        if (self.cursor as usize) + N <= self.end {
             // SAFETY: start + N is still in bounds
             unsafe {
-                let val = &*self.start.cast();
+                let val = &*self.cursor.cast();
                 self.advance(N);
                 Some(val)
             }
@@ -249,10 +261,10 @@ impl<'a> Cursor<'a> {
     #[inline]
     pub unsafe fn advance(&mut self, n: usize) {
         debug_assert!(
-            (self.start as usize) + n <= self.end,
+            (self.cursor as usize) + n <= self.end,
             "`Cursor::advance` safety violated, advancing `n` is out of bounds"
         );
-        unsafe { self.start = self.start.add(n) };
+        unsafe { self.cursor = self.cursor.add(n) };
     }
 
     /// Move cursor backwards cursor.
@@ -262,7 +274,11 @@ impl<'a> Cursor<'a> {
     /// Must not step back pass the first slice element.
     #[inline]
     pub unsafe fn step_back(&mut self, n: usize) {
-        unsafe { self.start = self.start.sub(n) };
+        debug_assert!(
+            (self.cursor as usize) - n >= self.start as usize,
+            "`Cursor::step_back` safety violated, stepping back `n` is out of bounds"
+        );
+        unsafe { self.cursor = self.cursor.sub(n) };
     }
 }
 
@@ -292,6 +308,7 @@ fn test_cursor_advance() {
 
     let mut cursor = Cursor::new(&BUF[..]);
 
+    assert_eq!(cursor.step(), 0);
     assert_eq!(cursor.remaining(), BUF.len());
     assert_eq!(cursor.as_bytes(), BUF);
 
@@ -306,6 +323,7 @@ fn test_cursor_advance() {
     const REST: [u8; 10] = *b"ntent-Type";
     const REST_LEN: usize = REST.len();
 
+    assert_eq!(cursor.step(), 2);
     assert_eq!(cursor.remaining(), REST_LEN);
     assert_eq!(cursor.as_bytes(), REST);
 
@@ -317,6 +335,7 @@ fn test_cursor_advance() {
     // SAFETY: checked with `first_chunk::<REST_LEN>`
     unsafe { cursor.advance(REST_LEN) };
 
+    assert_eq!(cursor.step(), BUF_LEN);
     assert!(!cursor.has_remaining());
     assert!(cursor.first().is_none());
     assert!(cursor.first_chunk::<5>().is_none());
@@ -337,7 +356,8 @@ fn test_cursor_pop_front() {
     let bytes = &BUF[..];
     let mut cursor = Cursor::new(bytes);
 
-    assert_eq!(cursor.remaining(), BUF.len());
+    assert_eq!(cursor.step(), 0);
+    assert_eq!(cursor.remaining(), BUF_LEN);
     assert_eq!(cursor.as_bytes(), BUF);
 
     assert_eq!(cursor.first(), Some(b'C'));
@@ -351,6 +371,7 @@ fn test_cursor_pop_front() {
     const REST: [u8; 10] = *b"ntent-Type";
     const REST_LEN: usize = REST.len();
 
+    assert_eq!(cursor.step(), 2);
     assert_eq!(cursor.remaining(), REST_LEN);
     assert_eq!(cursor.as_bytes(), REST);
 
@@ -364,6 +385,7 @@ fn test_cursor_pop_front() {
     assert!(!cursor.has_remaining());
     assert!(cursor.first().is_none());
     assert!(cursor.first_chunk::<5>().is_none());
+    assert_eq!(cursor.step(), BUF_LEN);
     assert_eq!(cursor.as_bytes(), b"");
 
     // empty buffer
