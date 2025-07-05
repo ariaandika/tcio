@@ -67,7 +67,7 @@ pub trait AsyncIoWrite {
     /// Tries to write all data from the provided buffer into the stream, advancing buffer cursor.
     ///
     /// Returns [`Poll::Pending`] if the underlying stream not ready for writing.
-    fn poll_write_all_buf<B>(&self, buf: &mut B) -> Poll<io::Result<()>>
+    fn poll_write_all_buf<B>(&self, buf: &mut B, cx: &mut std::task::Context) -> Poll<io::Result<()>>
     where
         B: bytes::Buf + ?Sized,
     {
@@ -77,9 +77,9 @@ pub trait AsyncIoWrite {
             let read = if self.is_write_vectored() {
                 let mut slices = [io::IoSlice::new(&[]); MAX_VECTOR_ELEMENTS];
                 let cnt = buf.chunks_vectored(&mut slices);
-                tri!(self.try_write_vectored(&slices[..cnt]))
+                tri!(ready!(self.poll_write_vectored(&slices[..cnt], cx)))
             } else {
-                tri!(self.try_write(buf.chunk()))
+                tri!(ready!(self.poll_write(buf.chunk(), cx)))
             };
             buf.advance(read);
             if read == 0 {
