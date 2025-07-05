@@ -26,29 +26,6 @@ impl<L, R> From<EitherMap<L, R>> for Either<L, R> {
     }
 }
 
-// ===== Projection =====
-
-enum EitherProject<'p, L, R>
-where
-    Either<L, R>: 'p,
-{
-    Left(Pin<&'p mut L>),
-    Right(Pin<&'p mut R>),
-}
-
-impl<L, R> Either<L, R> {
-    fn project<'p>(self: Pin<&'p mut Self>) -> EitherProject<'p, L, R> {
-        // SAFETY: self is pinned
-        // no `Drop`, nor manual `Unpin` implementation.
-        unsafe {
-            match self.get_unchecked_mut() {
-                Self::Left(l) => EitherProject::Left(Pin::new_unchecked(l)),
-                Self::Right(r) => EitherProject::Right(Pin::new_unchecked(r)),
-            }
-        }
-    }
-}
-
 impl<L: Future, R: Future<Output = L::Output>> Future for Either<L, R> {
     type Output = L::Output;
 
@@ -57,9 +34,13 @@ impl<L: Future, R: Future<Output = L::Output>> Future for Either<L, R> {
         self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
-        match self.project() {
-            EitherProject::Left(pin) => pin.poll(cx),
-            EitherProject::Right(pin) => pin.poll(cx),
+        // SAFETY: self is pinned
+        // no `Drop`, nor manual `Unpin` implementation.
+        unsafe {
+            match self.get_unchecked_mut() {
+                Self::Left(l) => Pin::new_unchecked(l).poll(cx),
+                Self::Right(r) => Pin::new_unchecked(r).poll(cx),
+            }
         }
     }
 }
