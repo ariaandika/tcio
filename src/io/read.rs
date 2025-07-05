@@ -3,6 +3,36 @@ use std::{
     task::{Poll, ready},
 };
 
+/// Tries to read data from the stream into the provided buffer, advance buffer cursor, returning
+/// how many bytes were read.
+pub fn poll_read_fn<B: bytes::BufMut>(
+    poll: impl FnOnce(&mut [u8], &mut std::task::Context) -> Poll<io::Result<usize>>,
+    mut buf: B,
+    cx: &mut std::task::Context,
+) -> Poll<io::Result<usize>> {
+    if !buf.has_remaining_mut() {
+        return Poll::Ready(Ok(0));
+    }
+
+    let read = {
+        // SAFETY: we will only write initialized value and `MaybeUninit<T>` is guaranteed to
+        // have the same size as `T`:
+        let dst = unsafe {
+            &mut *(buf.chunk_mut().as_uninit_slice_mut() as *mut [std::mem::MaybeUninit<u8>]
+                as *mut [u8])
+        };
+
+        tri!(ready!(poll(dst, cx)))
+    };
+
+    // SAFETY: This is guaranteed to be the number of initialized by `try_read`
+    unsafe {
+        buf.advance_mut(read);
+    }
+
+    Poll::Ready(Ok(read))
+}
+
 /// Asynchronous io read operation.
 pub trait AsyncIoRead {
     /// Polls for read readiness.
