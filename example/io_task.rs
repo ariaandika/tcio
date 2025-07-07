@@ -1,7 +1,10 @@
 //! Example for creating task based io operation.
 use std::{future::poll_fn, io};
 use tcio::io::AsyncIoWrite;
-use tokio::{net::{TcpListener, TcpStream}, runtime::Runtime};
+use tokio::{
+    net::{TcpListener, TcpStream},
+    runtime::Runtime,
+};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     Runtime::new().unwrap().block_on(async {
@@ -9,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         tokio::spawn(sender());
 
-        let (io,_) = tcp.accept().await?;
+        let (io, _) = tcp.accept().await?;
 
         let mut handle = task::IoHandle::new_spawn(io);
 
@@ -23,19 +26,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn sender() -> Result<(), io::Error> {
     let io = TcpStream::connect("0.0.0.0:3000").await?;
 
-    poll_fn(|cx|io.poll_write_all_buf(&mut &b"foo"[..], cx)).await?;
+    poll_fn(|cx| io.poll_write_all_buf(&mut &b"foo"[..], cx)).await?;
 
     Ok(())
 }
 
 mod task {
     use bytes::{Bytes, BytesMut};
-    use tcio::tokio::{poll_read, poll_write_all};
     use std::{
         io,
         pin::Pin,
         task::{Poll, ready},
     };
+    use tcio::tokio::{poll_read, poll_write_all};
     use tokio::{
         io::{AsyncRead, AsyncWrite},
         sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
@@ -54,13 +57,10 @@ mod task {
     impl IoHandle {
         /// Create new [`IoHandle`].
         pub fn new<IO>(io: IO) -> (Self, IoTask<IO>) {
-            let (s1,r1) = unbounded_channel();
-            let (s2,r2) = unbounded_channel();
+            let (s1, r1) = unbounded_channel();
+            let (s2, r2) = unbounded_channel();
 
-            let me = Self {
-                tx: s1,
-                rx: r2,
-            };
+            let me = Self { tx: s1, rx: r2 };
 
             let task = IoTask {
                 io,
@@ -91,7 +91,7 @@ mod task {
     }
 
     /// Future for excuting the shared io operation.
-#[derive(Debug)]
+    #[derive(Debug)]
     pub struct IoTask<IO> {
         io: IO,
         tx: Tx,
@@ -100,7 +100,7 @@ mod task {
         buffer: BytesMut,
     }
 
-#[derive(Debug)]
+    #[derive(Debug)]
     enum Phase {
         Idle,
         Read,
@@ -138,57 +138,56 @@ mod task {
     }
 
     impl<IO> Future for IoTask<IO>
-        where
-            IO: AsyncRead + AsyncWrite,
-        {
-            type Output = ();
+    where
+        IO: AsyncRead + AsyncWrite,
+    {
+        type Output = ();
 
-            fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context) -> Poll<Self::Output> {
-                let mut me = self.as_mut().project();
+        fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context) -> Poll<Self::Output> {
+            let mut me = self.as_mut().project();
 
-                loop {
-                    match me.phase {
-                        Phase::Idle => {
-                            let Some(msg) = ready!(me.rx.poll_recv(cx)) else {
-                                return Poll::Ready(());
-                            };
+            loop {
+                match me.phase {
+                    Phase::Idle => {
+                        let Some(msg) = ready!(me.rx.poll_recv(cx)) else {
+                            return Poll::Ready(());
+                        };
 
-                            match msg {
-                                Message::Read => *me.phase = Phase::Read,
-                                Message::Data(Ok(data)) => *me.phase = Phase::Write(data),
-                                _ => { }
+                        match msg {
+                            Message::Read => *me.phase = Phase::Read,
+                            Message::Data(Ok(data)) => *me.phase = Phase::Write(data),
+                            _ => {}
+                        }
+                    }
+                    Phase::Read => {
+                        let result = ready!(poll_read(&mut me.read_buf, &mut me.io, cx));
+                        match result {
+                            Ok(read) => {
+                                let read = me.read_buf.split_to(read);
+                                let _ = me.tx.send(Message::Data(Ok(read.freeze())));
                             }
-                        },
-                        Phase::Read => {
-                            let result = ready!(poll_read(&mut me.read_buf, &mut me.io, cx));
-                            match result {
-                                Ok(read) => {
-                                    let read = me.read_buf.split_to(read);
-                                    let _ = me.tx.send(Message::Data(Ok(read.freeze())));
-                                },
-                                Err(err) => {
-                                    let _ = me.tx.send(Message::Data(Err(err)));
-                                },
-                            }
-                            *me.phase = Phase::Idle;
-                        },
-                        Phase::Write(data) => {
-                            let result = ready!(poll_write_all(data, &mut me.io, cx));
-                            if let Err(err) = result {
+                            Err(err) => {
                                 let _ = me.tx.send(Message::Data(Err(err)));
                             }
-                            *me.phase = Phase::Idle;
-                        },
+                        }
+                        *me.phase = Phase::Idle;
                     }
-
+                    Phase::Write(data) => {
+                        let result = ready!(poll_write_all(data, &mut me.io, cx));
+                        if let Err(err) = result {
+                            let _ = me.tx.send(Message::Data(Err(err)));
+                        }
+                        *me.phase = Phase::Idle;
+                    }
                 }
             }
         }
+    }
 
     // ===== Futures =====
 
     /// Future returned from [`IoHandle::read`].
-#[derive(Debug)]
+    #[derive(Debug)]
     pub struct ReadFuture<'a> {
         send: bool,
         handle: &'a mut IoHandle,
@@ -196,7 +195,10 @@ mod task {
 
     impl<'a> ReadFuture<'a> {
         fn new(handle: &'a mut IoHandle) -> Self {
-            Self { handle, send: false }
+            Self {
+                handle,
+                send: false,
+            }
         }
     }
 
@@ -208,7 +210,7 @@ mod task {
             let handle = &mut me.handle;
 
             if !me.send && handle.tx.send(Message::Read).is_err() {
-                return Poll::Ready(Err(ErrorKind::ChannelClosed.into()))
+                return Poll::Ready(Err(ErrorKind::ChannelClosed.into()));
             }
 
             me.send = true;
@@ -217,8 +219,7 @@ mod task {
                 Some(Message::Data(Ok(data))) => Poll::Ready(Ok(data)),
                 Some(Message::Data(Err(io_err))) => Poll::Ready(Err(ErrorKind::Io(io_err).into())),
 
-                Some(Message::Read) |
-                    None => Poll::Ready(Err(ErrorKind::ChannelClosed.into())),
+                Some(Message::Read) | None => Poll::Ready(Err(ErrorKind::ChannelClosed.into())),
             }
         }
     }
@@ -226,12 +227,12 @@ mod task {
     // ===== Error =====
 
     /// Error which can occur during [`IoHandle`] operations.
-#[derive(Debug)]
+    #[derive(Debug)]
     pub struct Error {
         kind: ErrorKind,
     }
 
-#[derive(Debug)]
+    #[derive(Debug)]
     enum ErrorKind {
         Io(io::Error),
         ChannelClosed,
@@ -243,7 +244,7 @@ mod task {
         }
     }
 
-    impl std::error::Error for Error { }
+    impl std::error::Error for Error {}
     impl std::fmt::Display for Error {
         fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
             match &self.kind {
@@ -253,4 +254,3 @@ mod task {
         }
     }
 }
-
