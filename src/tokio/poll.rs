@@ -1,9 +1,17 @@
-use std::{io::{self, IoSlice}, pin::Pin, task::{ready, Poll}};
 use bytes::{Buf, BufMut};
+use std::{
+    io::{self, IoSlice},
+    pin::Pin,
+    task::{Poll, ready},
+};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
-
-pub fn poll_read<B, IO>(mut buf: B, mut io: IO, cx: &mut std::task::Context) -> Poll<io::Result<usize>>
+/// Try to read from [`AsyncRead`] and write to [`BufMut`].
+pub fn poll_read<B, IO>(
+    mut buf: B,
+    mut io: IO,
+    cx: &mut std::task::Context,
+) -> Poll<io::Result<usize>>
 where
     B: BufMut,
     IO: AsyncRead + Unpin,
@@ -33,7 +41,7 @@ where
     Poll::Ready(Ok(n))
 }
 
-
+/// Try to read from [`Buf`] and write to [`AsyncRead`].
 pub fn poll_write_all<B, IO>(
     mut buf: B,
     mut io: IO,
