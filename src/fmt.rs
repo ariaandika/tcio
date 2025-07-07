@@ -23,8 +23,8 @@
 /// [`Debug`]: std::fmt::Debug
 /// [`Display`]: std::fmt::Display
 #[inline]
-pub fn lossy(buf: &[u8]) -> LossyFmt<'_> {
-    LossyFmt(buf)
+pub fn lossy<B: AsRef<[u8]>>(buf: &B) -> LossyFmt<'_> {
+    LossyFmt(buf.as_ref())
 }
 
 /// Return type of [`lossy`].
