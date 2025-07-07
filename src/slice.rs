@@ -1,39 +1,33 @@
 //! raw bytes utilities.
 use bytes::Bytes;
 
-macro_rules! example_range {
-    () => {
-r#"# Examples
-
-```
-# use bytes::{BytesMut, Bytes};
-use tcio::slice::{range_of, slice_of_bytes};
-
-let mut bytesm = BytesMut::from(&b"Content-Type: text/html"[..]);
-let range = range_of(&bytesm[14..]);
-
-// `.freeze()` require mutation on `bytesm`,
-// so any slice reference cannot pass this point;
-//
-// because `.split_off()` guarantees that address
-// does not change, its possible to store pointer as index,
-// therefore, no lifetime restriction
-let bytes = bytesm.split_off(12).freeze();
-
-// Shared `Bytes`, no copy
-let content: Bytes = slice_of_bytes(range, &bytes);
-
-assert_eq!(content, &b"text/html"[..]);
-```"#
-    };
-}
-
 /// Returns the pointer range of a buffer.
 ///
 /// This is intended to be used with [`slice_of_bytes`] to keep a slice of [`BytesMut`] and
 /// freezing it while keeping the slice without copying.
 ///
-#[doc = example_range!()]
+/// # Examples
+///
+/// ```
+/// # use bytes::{BytesMut, Bytes};
+/// use tcio::slice::{range_of, slice_of_bytes};
+///
+/// let mut bytesm = BytesMut::from(&b"Content-Type: text/html"[..]);
+/// let range = range_of(&bytesm[14..]);
+///
+/// // `.freeze()` require mutation on `bytesm`,
+/// // so any slice reference cannot pass this point;
+/// //
+/// // because `.split_off()` guarantees that address
+/// // does not change, its possible to store pointer as index,
+/// // therefore, no lifetime restriction
+/// let bytes = bytesm.split_off(12).freeze();
+///
+/// // Shared `Bytes`, no copy
+/// let content: Bytes = slice_of_bytes(range, &bytes);
+///
+/// assert_eq!(content, &b"text/html"[..]);
+/// ```
 ///
 /// [`BytesMut`]: bytes::BytesMut
 #[inline]
@@ -47,7 +41,28 @@ pub fn range_of(buf: &[u8]) -> std::ops::Range<usize> {
 /// This is intented to be used with [`range_of`] to keep a slice of [`BytesMut`] and freezing it
 /// while keeping the slice without copying.
 ///
-#[doc = example_range!()]
+/// # Examples
+///
+/// ```
+/// # use bytes::{BytesMut, Bytes};
+/// use tcio::slice::{range_of, slice_of_bytes};
+///
+/// let mut bytesm = BytesMut::from(&b"Content-Type: text/html"[..]);
+/// let range = range_of(&bytesm[14..]);
+///
+/// // `.freeze()` require mutation on `bytesm`,
+/// // so any slice reference cannot pass this point;
+/// //
+/// // because `.split_off()` guarantees that address
+/// // does not change, its possible to store pointer as index,
+/// // therefore, no lifetime restriction
+/// let bytes = bytesm.split_off(12).freeze();
+///
+/// // Shared `Bytes`, no copy
+/// let content: Bytes = slice_of_bytes(range, &bytes);
+///
+/// assert_eq!(content, &b"text/html"[..]);
+/// ```
 ///
 /// # Panics
 ///
