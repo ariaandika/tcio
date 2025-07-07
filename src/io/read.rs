@@ -1,3 +1,4 @@
+use bytes::BufMut;
 use std::{
     io,
     task::{Poll, ready},
@@ -5,11 +6,14 @@ use std::{
 
 /// Tries to read data from the stream into the provided buffer, advance buffer cursor, returning
 /// how many bytes were read.
-pub fn poll_read_fn<B: bytes::BufMut>(
+pub fn poll_read_fn<B>(
     poll: impl FnOnce(&mut [u8], &mut std::task::Context) -> Poll<io::Result<usize>>,
-    mut buf: B,
+    buf: &mut B,
     cx: &mut std::task::Context,
-) -> Poll<io::Result<usize>> {
+) -> Poll<io::Result<usize>>
+where
+    B: BufMut + ?Sized,
+{
     if !buf.has_remaining_mut() {
         return Poll::Ready(Ok(0));
     }
@@ -73,7 +77,7 @@ pub trait AsyncIoRead {
         cx: &mut std::task::Context,
     ) -> Poll<io::Result<usize>>
     where
-        B: bytes::BufMut + ?Sized,
+        B: BufMut + ?Sized,
     {
         if !buf.has_remaining_mut() {
             return Poll::Ready(Ok(0));
@@ -98,6 +102,22 @@ pub trait AsyncIoRead {
         Poll::Ready(Ok(read))
     }
 
+    /// Tries to read data from the stream into the provided buffer, advance buffer cursor,
+    /// returning how many bytes were read.
+    #[inline]
+    fn read(&self, buf: &mut [u8]) -> impl Future<Output = io::Result<usize>> {
+        std::future::poll_fn(|cx| self.poll_read(buf, cx))
+    }
+
+    /// Tries to read data from the stream into the provided buffer, advance buffer cursor,
+    /// returning how many bytes were read.
+    #[inline]
+    fn read_buf<B>(&self, buf: &mut B) -> impl Future<Output = io::Result<usize>>
+    where
+        B: BufMut + ?Sized,
+    {
+        std::future::poll_fn(|cx| self.poll_read_buf(buf, cx))
+    }
 }
 
 // ===== Macros =====

@@ -8,12 +8,12 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
 /// Try to read from [`AsyncRead`] and write to [`BufMut`].
 pub fn poll_read<B, IO>(
-    mut buf: B,
-    mut io: IO,
+    buf: &mut B,
+    io: &mut IO,
     cx: &mut std::task::Context,
 ) -> Poll<io::Result<usize>>
 where
-    B: BufMut,
+    B: BufMut + ?Sized,
     IO: AsyncRead + Unpin,
 {
     if !buf.has_remaining_mut() {
@@ -25,7 +25,7 @@ where
         let dst = unsafe { dst.as_uninit_slice_mut() };
         let mut buf = ReadBuf::uninit(dst);
         let ptr = buf.filled().as_ptr();
-        ready!(Pin::new(&mut io).poll_read(cx, &mut buf)?);
+        ready!(Pin::new(io).poll_read(cx, &mut buf)?);
 
         // Ensure the pointer does not change from under us
         assert_eq!(ptr, buf.filled().as_ptr());
@@ -43,12 +43,12 @@ where
 
 /// Try to read from [`Buf`] and write to [`AsyncRead`].
 pub fn poll_write_all<B, IO>(
-    mut buf: B,
-    mut io: IO,
+    buf: &mut B,
+    io: &mut IO,
     cx: &mut std::task::Context,
 ) -> Poll<io::Result<()>>
 where
-    B: Buf,
+    B: Buf + ?Sized,
     IO: AsyncWrite + Unpin,
 {
     const MAX_VECTOR_ELEMENTS: usize = 64;
@@ -57,9 +57,9 @@ where
         let n = if io.is_write_vectored() {
             let mut slices = [IoSlice::new(&[]); MAX_VECTOR_ELEMENTS];
             let cnt = buf.chunks_vectored(&mut slices);
-            ready!(Pin::new(&mut io).poll_write_vectored(cx, &slices[..cnt]))?
+            ready!(Pin::new(&mut *io).poll_write_vectored(cx, &slices[..cnt]))?
         } else {
-            ready!(Pin::new(&mut io).poll_write(cx, buf.chunk())?)
+            ready!(Pin::new(&mut *io).poll_write(cx, buf.chunk())?)
         };
         buf.advance(n);
         if n == 0 {

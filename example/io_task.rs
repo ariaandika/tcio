@@ -160,7 +160,7 @@ mod task {
                             }
                         },
                         Phase::Read => {
-                            let result = ready!(poll_read(&mut me.read_buf, me.io.as_mut(), cx));
+                            let result = ready!(poll_read(&mut me.read_buf, &mut me.io, cx));
                             match result {
                                 Ok(read) => {
                                     let read = me.read_buf.split_to(read);
@@ -173,7 +173,7 @@ mod task {
                             *me.phase = Phase::Idle;
                         },
                         Phase::Write(data) => {
-                            let result = ready!(poll_write_all(data, me.io.as_mut(), cx));
+                            let result = ready!(poll_write_all(data, &mut me.io, cx));
                             if let Err(err) = result {
                                 let _ = me.tx.send(Message::Data(Err(err)));
                             }

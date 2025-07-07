@@ -52,22 +52,24 @@ pub trait AsyncIoWrite {
     /// Try to write a buffer to the stream, returning how many bytes were written.
     ///
     /// Returns [`Poll::Pending`] if the underlying stream not ready for writing.
-    fn poll_write_buf<B>(
-        &self,
-        buf: &mut B,
-        cx: &mut std::task::Context,
-    ) -> Poll<io::Result<usize>>
+    fn poll_write_buf<B>(&self, buf: &mut B, cx: &mut std::task::Context) -> Poll<io::Result<usize>>
     where
         B: bytes::Buf + ?Sized,
     {
-        self.poll_write(buf.chunk(), cx)
-            .map(|e| e.inspect(|&read| buf.advance(read)))
+        self.poll_write(buf.chunk(), cx).map_ok(|read| {
+            buf.advance(read);
+            read
+        })
     }
 
     /// Tries to write all data from the provided buffer into the stream, advancing buffer cursor.
     ///
     /// Returns [`Poll::Pending`] if the underlying stream not ready for writing.
-    fn poll_write_all_buf<B>(&self, buf: &mut B, cx: &mut std::task::Context) -> Poll<io::Result<()>>
+    fn poll_write_all_buf<B>(
+        &self,
+        buf: &mut B,
+        cx: &mut std::task::Context,
+    ) -> Poll<io::Result<()>>
     where
         B: bytes::Buf + ?Sized,
     {
