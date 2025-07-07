@@ -41,12 +41,7 @@ impl IoStream {
     where
         A: ToSocketAddrs,
     {
-        map(TcpStream::connect(addr), |e| match e {
-            Ok(ok) => Ok(Self {
-                repr: Repr::Tcp(ok),
-            }),
-            Err(err) => Err(err),
-        })
+        map(TcpStream::connect(addr), |e| e.map(<_>::into))
     }
 
     /// Connects to the unix socket named by `path`.
@@ -56,12 +51,7 @@ impl IoStream {
     where
         P: AsRef<std::path::Path>,
     {
-        map(UnixStream::connect(path), |e| match e {
-            Ok(ok) => Ok(Self {
-                repr: Repr::Unix(ok),
-            }),
-            Err(err) => Err(err),
-        })
+        map(UnixStream::connect(path), |e| e.map(<_>::into))
     }
 }
 
@@ -102,7 +92,7 @@ impl AsyncIoRead for IoStream {
     }
 
     #[inline]
-    fn try_read_vectored(&self, bufs: &mut [io::IoSliceMut<'_>]) -> io::Result<usize> {
+    fn try_read_vectored(&self, bufs: &mut [io::IoSliceMut]) -> io::Result<usize> {
         match &self.repr {
             Repr::Tcp(t) => t.try_read_vectored(bufs),
             #[cfg(unix)]
@@ -113,7 +103,7 @@ impl AsyncIoRead for IoStream {
 
 impl AsyncIoWrite for IoStream {
     #[inline]
-     fn poll_write_ready(&self, cx: &mut std::task::Context) -> Poll<io::Result<()>> {
+    fn poll_write_ready(&self, cx: &mut std::task::Context) -> Poll<io::Result<()>> {
         match &self.repr {
             Repr::Tcp(t) => t.poll_write_ready(cx),
             #[cfg(unix)]
