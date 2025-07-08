@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut handle = task::IoHandle::new_spawn(io);
 
-        let data = handle.read().await?;
+        let data = poll_fn(|cx| handle.poll_read(cx)).await?;
         assert_eq!(data.as_ref(), b"foo");
 
         Ok(())
@@ -50,6 +50,7 @@ mod task {
     /// Handle for operating with task based shared io operaion.
     #[derive(Debug)]
     pub struct IoHandle {
+        send: bool,
         tx: Tx,
         rx: Rx,
     }
@@ -60,7 +61,11 @@ mod task {
             let (s1, r1) = unbounded_channel();
             let (s2, r2) = unbounded_channel();
 
-            let me = Self { tx: s1, rx: r2 };
+            let me = Self {
+                send: false,
+                tx: s1,
+                rx: r2
+            };
 
             let task = IoTask {
                 io,
@@ -84,9 +89,25 @@ mod task {
             me
         }
 
-        /// Try read data from underlying io.
-        pub fn read(&mut self) -> ReadFuture<'_> {
-            ReadFuture::new(self)
+        pub fn poll_read(&mut self, cx: &mut std::task::Context) -> Poll<Result<Bytes, Error>> {
+            if !self.send {
+                if self.tx.send(Message::Read).is_err() {
+                    return Poll::Ready(Err(ErrorKind::ChannelClosed.into()));
+                }
+                self.send = true;
+            }
+            let result = match ready!(self.rx.poll_recv(cx)) {
+                Some(Message::Data(Ok(data))) => Ok(data),
+                Some(Message::Data(Err(err))) => Err(err.into()),
+                Some(_) => return self.poll_read(cx),
+                None => Err(ErrorKind::ChannelClosed.into()),
+            };
+            Poll::Ready(result)
+        }
+
+        #[allow(unused, reason = "example")]
+        pub fn read(&mut self) -> impl Future<Output = Result<Bytes, Error>> {
+            std::future::poll_fn(|cx| self.poll_read(cx))
         }
     }
 
@@ -156,7 +177,7 @@ mod task {
                         match msg {
                             Message::Read => *me.phase = Phase::Read,
                             Message::Data(Ok(data)) => *me.phase = Phase::Write(data),
-                            _ => {}
+                            Message::Data(Err(_)) => {}
                         }
                     }
                     Phase::Read => {
@@ -184,46 +205,6 @@ mod task {
         }
     }
 
-    // ===== Futures =====
-
-    /// Future returned from [`IoHandle::read`].
-    #[derive(Debug)]
-    pub struct ReadFuture<'a> {
-        send: bool,
-        handle: &'a mut IoHandle,
-    }
-
-    impl<'a> ReadFuture<'a> {
-        fn new(handle: &'a mut IoHandle) -> Self {
-            Self {
-                handle,
-                send: false,
-            }
-        }
-    }
-
-    impl Future for ReadFuture<'_> {
-        type Output = Result<Bytes, Error>;
-
-        fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context) -> Poll<Self::Output> {
-            let me = self.as_mut().get_mut();
-            let handle = &mut me.handle;
-
-            if !me.send && handle.tx.send(Message::Read).is_err() {
-                return Poll::Ready(Err(ErrorKind::ChannelClosed.into()));
-            }
-
-            me.send = true;
-
-            match ready!(handle.rx.poll_recv(cx)) {
-                Some(Message::Data(Ok(data))) => Poll::Ready(Ok(data)),
-                Some(Message::Data(Err(io_err))) => Poll::Ready(Err(ErrorKind::Io(io_err).into())),
-
-                Some(Message::Read) | None => Poll::Ready(Err(ErrorKind::ChannelClosed.into())),
-            }
-        }
-    }
-
     // ===== Error =====
 
     /// Error which can occur during [`IoHandle`] operations.
@@ -236,6 +217,12 @@ mod task {
     enum ErrorKind {
         Io(io::Error),
         ChannelClosed,
+    }
+
+    impl From<io::Error> for Error{
+        fn from(v: io::Error) -> Self {
+            Self { kind: ErrorKind::Io(v) }
+        }
     }
 
     impl From<ErrorKind> for Error {
