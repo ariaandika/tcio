@@ -1,5 +1,5 @@
 //! raw bytes utilities.
-use bytes::Bytes;
+use bytes::{Bytes, BytesMut};
 
 /// Returns the pointer range of a buffer.
 ///
@@ -94,12 +94,15 @@ pub fn slice_of_bytes(range: std::ops::Range<usize>, bytes: &Bytes) -> Bytes {
         return Bytes::new()
     }
 
-    assert!(
-        sub_p >= bytes_p,
-        "range pointer ({:p}) is smaller than `bytes` pointer ({:p})",
-        sub_p as *const u8,
-        bytes.as_ptr(),
-    );
+    let Some(offset) = sub_p.checked_sub(bytes_p) else {
+        // assert failed: sub_p >= bytes_p
+        panic!(
+            "range pointer ({:p}) is smaller than `bytes` pointer ({:p})",
+            sub_p as *const u8,
+            bytes.as_ptr(),
+        );
+    };
+
     assert!(
         sub_p + sub_len <= bytes_p + bytes_len,
         "subset is out of bounds: self = ({:p}, {}), subset = ({:p}, {})",
@@ -109,9 +112,67 @@ pub fn slice_of_bytes(range: std::ops::Range<usize>, bytes: &Bytes) -> Bytes {
         sub_len,
     );
 
-    let offset = sub_p.saturating_sub(bytes_p);
-
     bytes.slice(offset..offset + sub_len)
+}
+
+/// Returns the splitted [`BytesMut`] by given pointer range.
+///
+/// Afterwards `bytes` contains elements `[range.end, len)`, and the returned [`BytesMut`] contains
+/// elements `[range.start, range.end)`.
+///
+/// If the given pointer range is not exactly in the front of `bytes`, the leading bytes will be
+/// dropped.
+///
+/// # Examples
+///
+/// ```
+/// # use bytes::{BytesMut, Bytes};
+/// use tcio::slice::{range_of, slice_of_bytes_mut};
+///
+/// let mut bytesm = BytesMut::from(&b"Content-Type: text/html"[..]);
+/// let range = range_of(&bytesm[14..18]);
+///
+/// let mut split = bytesm.split_off(12);
+///
+/// let content: BytesMut = slice_of_bytes_mut(range, &mut split);
+///
+/// // note that `: ` is dropped
+/// assert_eq!(content, &b"text"[..]);
+/// assert_eq!(split, &b"/html"[..]);
+/// ```
+///
+/// # Panics
+///
+/// Requires that the given pointer range is in fact contained within the `bytes`, otherwise this
+/// function will panic.
+pub fn slice_of_bytes_mut(range: std::ops::Range<usize>, bytes: &mut BytesMut) -> BytesMut {
+    let bytes_p = bytes.as_ptr() as usize;
+    let bytes_len = bytes.as_ptr() as usize;
+    let sub_len = range.end.saturating_sub(range.start);
+    let sub_p = range.start;
+
+    let Some(leading_len) = sub_p.checked_sub(bytes_p) else {
+        // assert failed: sub_p >= bytes_p
+        panic!(
+            "range pointer ({:p}) is smaller than `bytes` pointer ({:p})",
+            sub_p as *const u8,
+            bytes.as_ptr()
+        )
+    };
+
+    assert!(
+        sub_p + sub_len <= bytes_p + bytes_len,
+        "subset is out of bounds: self = ({:p}, {}), subset = ({:p}, {})",
+        bytes.as_ptr(),
+        bytes_len,
+        sub_p as *const u8,
+        sub_len,
+    );
+
+    // `BytesMut::advance` have early returns if offset 0
+    bytes::Buf::advance(bytes, leading_len);
+
+    bytes.split_to(sub_len)
 }
 
 /// Returns the subset value in `buf` with returned range from [`range_of`].
@@ -138,12 +199,14 @@ pub fn slice_of(range: std::ops::Range<usize>, buf: &[u8]) -> &[u8] {
         return &[]
     }
 
-    assert!(
-        sub_p >= buf_p,
-        "range pointer ({:p}) is smaller than `buf` pointer ({:p})",
-        sub_p as *const u8,
-        buf.as_ptr(),
-    );
+    let Some(offset) = sub_p.checked_sub(buf_p) else {
+        // assert failed: sub_p >= bytes_p
+        panic!(
+            "range pointer ({:p}) is smaller than `bytes` pointer ({:p})",
+            sub_p as *const u8,
+            buf.as_ptr(),
+        );
+    };
     assert!(
         sub_p + sub_len <= buf_p + buf_len,
         "subset is out of bounds: self = ({:p}, {}), subset = ({:p}, {})",
@@ -152,8 +215,6 @@ pub fn slice_of(range: std::ops::Range<usize>, buf: &[u8]) -> &[u8] {
         sub_p as *const u8,
         sub_len,
     );
-
-    let offset = sub_p.saturating_sub(buf_p);
 
     // SAFETY:
     // - sub_p >= buf_p
