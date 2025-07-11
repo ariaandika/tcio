@@ -1,6 +1,21 @@
 # Changelog
 
-## [Unreleased]
+## v0.1.4 (July 11 2025)
+
+### Added
+
+- add `pop_front` and `pop_chunk_front` method for `Cursor`
+- implement `Iterator` and `ExactSizeIterator` for `Cursor`
+- add `step_back` method for Cursor
+- add `step` and `original` method for Cursor
+- add `poll_read_fn` function
+- add `poll_read` and `poll_write_all` function
+- add `Recall` struct
+- add `slice_of_bytes_mut` function
+
+### Fixed
+
+- fix panic when creating `Cursor` with empty string
 
 ## v0.1.3
 

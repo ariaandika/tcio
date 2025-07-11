@@ -1,7 +1,7 @@
 [package]
 name = "tcio"
 description = "Collection of utility types."
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 authors = ["Aria Andika <andikaakun17@gmail.com>"]
 documentation = "https://docs.rs/tcio"
