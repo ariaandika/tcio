@@ -1,13 +1,17 @@
 use bytes::{Bytes, BytesMut};
 use std::{collections::VecDeque, io, mem::take, pin::Pin, task::Poll};
 use tokio::sync::{
-    mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel},
-    oneshot::Sender,
+    mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
+    oneshot::{Receiver, Sender},
 };
 
 use crate::io::{AsyncIoRead, AsyncIoWrite};
 
-type TaskRx = UnboundedReceiver<TaskTxMessage>;
+pub(crate) type TaskTx = UnboundedSender<TaskTxMessage>;
+pub(crate) type TaskRx = UnboundedReceiver<TaskTxMessage>;
+pub(crate) type TaskReadRx = Receiver<TaskReadMessage>;
+pub(crate) type TaskSyncTx = Sender<TaskSyncMessage>;
+pub(crate) type TaskSyncRx = Receiver<TaskSyncMessage>;
 type HandleTx = Sender<TaskReadMessage>;
 
 struct ReadTask {
@@ -28,7 +32,7 @@ struct WriteTask {
 pub enum TaskTxMessage {
     /// Read from io with optional exact size.
     ///
-    /// When ready, [`Data`][TaskRxMessage::Data] message will be send to `tx`.
+    /// When ready, [`Data`][TaskReadMessage::Data] message will be send to `tx`.
     Read {
         cap: Option<usize>,
         tx: HandleTx,
@@ -39,7 +43,7 @@ pub enum TaskTxMessage {
     },
     /// Request `writing` status, a [`TaskSyncMessage`] will be send immediately.
     Sync {
-        tx: Sender<TaskSyncMessage>,
+        tx: TaskSyncTx,
     },
 }
 
@@ -81,7 +85,7 @@ impl<IO> IoTask<IO>
 where
     IO: AsyncIoRead + AsyncIoWrite,
 {
-    pub(crate) fn new(io: IO) -> (UnboundedSender<TaskTxMessage>, Self) {
+    pub(crate) fn new(io: IO) -> (TaskTx, Self) {
         let (tx, rx) = unbounded_channel();
         let me = Self {
             rx,
