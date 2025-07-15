@@ -25,6 +25,10 @@ pub struct IoHandle {
 }
 
 impl IoHandle {
+    pub(crate) fn from_spawned(tx: TaskTx) -> Self {
+        Self { tx }
+    }
+
     /// Create new [`IoTask`] with [`IoHandle`] as the handle.
     #[inline]
     pub fn new<IO>(io: IO) -> (IoHandle, IoTask<IO>)
@@ -69,6 +73,12 @@ impl IoHandle {
             Ok(()) => Sync { repr: Repr::Ok(rx) },
             Err(_) => Sync::closed(),
         }
+    }
+
+    /// Convert into polling based [`IoPoll`][super::IoPoll].
+    #[inline]
+    pub fn into_polling(self) -> super::IoPoll {
+        super::IoPoll::from_spawned(self.tx)
     }
 
     // ===== Inner =====

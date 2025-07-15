@@ -6,10 +6,10 @@
 //!
 //! # Handle
 //!
-//! [`IoHandle`] is the stateless handle, all method returns the statefull [`Future`]. This allows
-//! for reference only operation.
-
-// [`IoClient`] is the statefull handle, all method is in a `poll` form.
+//! [`IoHandle`] is a stateless handle, all method returns the statefull [`Future`]. Good in
+//! userspace, where `.await` can be just used.
+//!
+//! [`IoHandle`] is a statefull handle, all method is polling based.
 
 #![allow(missing_debug_implementations, missing_docs, reason = "wip")]
 

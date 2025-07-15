@@ -39,6 +39,10 @@ enum Operation {
 }
 
 impl IoPoll {
+    pub(crate) fn from_spawned(tx: TaskTx) -> Self {
+        Self { ops: None, tx }
+    }
+
     /// Create new [`IoTask`] with [`IoPoll`] as the handle.
     #[inline]
     pub fn new<IO>(io: IO) -> (IoPoll, IoTask<IO>)
@@ -125,6 +129,12 @@ impl IoPoll {
                 self.poll_sync(cx)
             },
         }
+    }
+
+    /// Convert into shared handle [`IoHandle`][super::IoHandle].
+    #[inline]
+    pub fn into_handle(self) -> super::IoHandle {
+        super::IoHandle::from_spawned(self.tx)
     }
 }
 
