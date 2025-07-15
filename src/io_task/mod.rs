@@ -15,7 +15,11 @@
 
 mod task;
 mod handle;
+mod poll;
 
-pub use task::{IoTask, TaskTxMessage, TaskReadMessage, TaskSyncMessage};
-pub use handle::{IoHandle, Read};
+pub(crate) use task::{TaskTxMessage, TaskReadMessage, TaskSyncMessage};
+
+pub use task::IoTask;
+pub use handle::{IoHandle, Read, Sync};
+pub use poll::IoPoll;
 
