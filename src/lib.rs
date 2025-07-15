@@ -10,6 +10,7 @@ pub mod futures;
 pub mod io;
 pub mod fmt;
 pub mod sync;
+pub mod io_task;
 
 #[cfg(feature = "tokio")]
 pub mod tokio;
