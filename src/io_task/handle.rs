@@ -13,7 +13,7 @@ use super::{
     task::{TaskReadRx, TaskSyncRx, TaskTx},
 };
 
-/// A clonable stateless [`IoTask`] handle.
+/// A stateless [`IoTask`] handle.
 ///
 /// This handle is "stateless" in a sense that all operations only requires shared reference, which
 /// returns the statefull [`Future`].

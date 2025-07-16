@@ -27,6 +27,9 @@ macro_rules! poll_err {
 /// Note that all `poll_*` operation is not cancel safe. If `poll_read` called returns pending, and
 /// then user call `poll_sync`, it will returns an error.
 ///
+/// Note that [`Clone`] implementation of this handle does not clone the state, meaning that if the
+/// original handle is in pending read, the cloned handle does not have any pending operation.
+///
 /// See [crate level docs][super] for more details.
 pub struct IoPoll {
     ops: Option<Operation>,
@@ -135,6 +138,15 @@ impl IoPoll {
     #[inline]
     pub fn into_handle(self) -> super::IoHandle {
         super::IoHandle::from_spawned(self.tx)
+    }
+}
+
+impl Clone for IoPoll {
+    fn clone(&self) -> Self {
+        Self {
+            ops: None,
+            tx: self.tx.clone(),
+        }
     }
 }
 
