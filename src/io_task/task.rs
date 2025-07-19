@@ -81,10 +81,7 @@ pub struct IoTask<IO> {
 
 impl<IO> Unpin for IoTask<IO> {}
 
-impl<IO> IoTask<IO>
-where
-    IO: AsyncIoRead + AsyncIoWrite,
-{
+impl<IO> IoTask<IO> {
     pub(crate) fn new(io: IO) -> (TaskTx, Self) {
         let (tx, rx) = unbounded_channel();
         let me = Self {
@@ -159,7 +156,12 @@ where
             (Some(err), _) => TaskSyncMessage::Err(err),
         });
     }
+}
 
+impl<IO> IoTask<IO>
+where
+    IO: AsyncIoRead + AsyncIoWrite,
+{
     fn poll_read(&mut self, cx: &mut std::task::Context) {
         if self.is_terminating() {
             return;

@@ -20,6 +20,10 @@ mod poll;
 pub(crate) use task::{TaskTxMessage, TaskReadMessage, TaskSyncMessage};
 
 pub use task::IoTask;
-pub use handle::{IoHandle, Read, Sync};
+pub use handle::IoHandle;
 pub use poll::IoPoll;
+
+pub mod futures {
+    pub use super::handle::{Read, Sync};
+}
 
