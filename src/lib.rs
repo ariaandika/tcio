@@ -4,6 +4,7 @@
 mod bytestr;
 mod either;
 mod either_map;
+mod atoi;
 
 pub mod slice;
 pub mod futures;
@@ -21,3 +22,4 @@ pub mod io_task;
 pub use bytestr::ByteStr;
 pub use either::Either;
 pub use either_map::EitherMap;
+pub use atoi::atoi;
