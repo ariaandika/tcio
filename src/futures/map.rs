@@ -1,4 +1,4 @@
-use std::pin::Pin;
+use std::{pin::Pin, task::Poll};
 
 /// Map a [`Future`] output.
 ///
@@ -40,16 +40,16 @@ where
 {
     type Output = O;
 
-    fn poll(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         // SAFETY: self is pinned
         // no `Drop`, nor manual `Unpin` implementation.
         let (f, map) = unsafe {
             let me = self.get_unchecked_mut();
             (Pin::new_unchecked(&mut me.f), &mut me.map)
         };
-        f.poll(cx).map(map.take().expect("poll after complete"))
+        match f.poll(cx) {
+            Poll::Ready(ok) => Poll::Ready(map.take().expect("poll after complete")(ok)),
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
