@@ -22,4 +22,4 @@ pub mod io_task;
 pub use bytestr::ByteStr;
 pub use either::Either;
 pub use either_map::EitherMap;
-pub use atoi::atoi;
+pub use atoi::atou;
