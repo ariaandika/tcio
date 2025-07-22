@@ -1,5 +1,6 @@
 const U64_MAX_BUF: &[u8; 20] = b"18446744073709551615";
 const U64_MAX_CH: usize = U64_MAX_BUF.len();
+const U64_MAX_B_PTR: *const u8 = U64_MAX_BUF.as_ptr();
 
 /// Parse ascii to unsigned integer.
 pub const fn atou(text: &[u8]) -> Option<u64> {
@@ -7,12 +8,9 @@ pub const fn atou(text: &[u8]) -> Option<u64> {
         return None;
     }
 
-    if let Some(chunk) = text.first_chunk::<U64_MAX_CH>() {
-        return atou_max(chunk);
-    }
-
     let ptr = text.as_ptr();
     let max = text.len();
+    let is_max = max == U64_MAX_CH;
     let mut o = 0u64;
     let mut i = 0;
 
@@ -20,7 +18,9 @@ pub const fn atou(text: &[u8]) -> Option<u64> {
         unsafe {
             // SAFETY: i < text.len()
             let n = *ptr.add(i);
-            if n < b'0' || n > b'9' {
+
+            //                              SAFETY: i < U64_MAX_CH
+            if n < b'0' || n > (if is_max { *U64_MAX_B_PTR.add(i) } else { b'9' }) {
                 return None;
             }
 
@@ -31,36 +31,6 @@ pub const fn atou(text: &[u8]) -> Option<u64> {
                 .unchecked_add(u8::unchecked_sub(n, 48) as u64);
 
             // SAFETY: i < text.len()
-            i = i.unchecked_add(1);
-        }
-    }
-
-    Some(o)
-}
-
-const fn atou_max(text: &[u8; U64_MAX_CH]) -> Option<u64> {
-    const U64_MAX_B_PTR: *const u8 = U64_MAX_BUF.as_ptr();
-
-    // SAFETY: the first value of `ptr` is never get read
-    let p1 = text.as_ptr();
-    let mut o = 0u64;
-    let mut i = 0;
-
-    while i < U64_MAX_CH {
-        unsafe {
-            // SAFETY: i < U64_MAX_CH
-            let n = *p1.add(i);
-
-            if n < b'0' || n > *U64_MAX_B_PTR.add(i) {
-                return None;
-            }
-
-            // SAFETY: multiply will only happens U64_MAX_CH-nth time, thus cannot overflow
-            o = o
-                .unchecked_mul(10)
-                .unchecked_add(u8::unchecked_sub(n, 48) as u64);
-
-            // SAFETY: i <U64_MAX_CH
             i = i.unchecked_add(1);
         }
     }
