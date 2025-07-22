@@ -36,12 +36,9 @@ received message is a server message or a response message.
 
 ## `Multiplex`
 
-The `Multiple` model is combination of previous models, where a request
+The `Multiplex` model is combination of previous models, where a request
 message expect a response message, and multiple messages can be processed at
 the same time.
-
-In `Multiplex` model, not only the client can initiate a message, the server
-can also send a `push` message without waiting client request.
 
 # Protocol
 
