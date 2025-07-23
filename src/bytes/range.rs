@@ -9,7 +9,7 @@ use bytes::{Bytes, BytesMut};
 ///
 /// ```
 /// # use bytes::{BytesMut, Bytes};
-/// use tcio::slice::{range_of, slice_of_bytes};
+/// use tcio::bytes::{range_of, slice_of_bytes};
 ///
 /// let mut bytesm = BytesMut::from(&b"Content-Type: text/html"[..]);
 /// let range = range_of(&bytesm[14..]);
@@ -44,7 +44,7 @@ pub fn range_of(buf: &[u8]) -> std::ops::Range<usize> {
 ///
 /// ```
 /// # use bytes::{BytesMut, Bytes};
-/// use tcio::slice::{range_of, slice_of_bytes};
+/// use tcio::bytes::{range_of, slice_of_bytes};
 ///
 /// let mut bytesm = BytesMut::from(&b"Content-Type: text/html"[..]);
 /// let range = range_of(&bytesm[14..]);
@@ -70,7 +70,7 @@ pub fn range_of(buf: &[u8]) -> std::ops::Range<usize> {
 ///
 /// ```should_panic
 /// # use bytes::{BytesMut, Bytes};
-/// use tcio::slice::{range_of, slice_of_bytes};
+/// use tcio::bytes::{range_of, slice_of_bytes};
 ///
 /// let mut bytesm = BytesMut::from(&b"Content-Type: text/html"[..]);
 /// let range = range_of(&bytesm[14..]);
@@ -126,7 +126,7 @@ pub fn slice_of_bytes(range: std::ops::Range<usize>, bytes: &Bytes) -> Bytes {
 ///
 /// ```
 /// # use bytes::{BytesMut, Bytes};
-/// use tcio::slice::{range_of, slice_of_bytes_mut};
+/// use tcio::bytes::{range_of, slice_of_bytes_mut};
 ///
 /// let mut bytesm = BytesMut::from(&b"Content-Type: text/html"[..]);
 /// let range = range_of(&bytesm[14..18]);
@@ -179,7 +179,7 @@ pub fn slice_of_bytes_mut(range: std::ops::Range<usize>, bytes: &mut BytesMut) -
 /// # Examples
 ///
 /// ```
-/// use tcio::slice::{range_of, slice_of};
+/// use tcio::bytes::{range_of, slice_of};
 ///
 /// let mut bytes = b"Content-Type: text/html";
 /// let range = range_of(&bytes[14..]);
