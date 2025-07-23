@@ -6,7 +6,7 @@ mod either;
 mod either_map;
 mod atoi;
 
-pub mod slice;
+pub mod bytes;
 pub mod futures;
 pub mod io;
 pub mod fmt;
