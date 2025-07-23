@@ -86,7 +86,7 @@ impl<'a> Cursor<'a> {
 
     /// Try get the first `N`-th bytes without advancing cursor.
     #[inline]
-    pub fn peek_chunk<const N: usize>(&self) -> Option<&[u8; N]> {
+    pub fn peek_chunk<const N: usize>(&self) -> Option<&'a [u8; N]> {
         if ptr!(add(self.cursor, N)) > self.end {
             None
         } else {
@@ -292,6 +292,7 @@ fn test_cursor_advance() {
     assert!(cursor.peek().is_none());
     assert!(cursor.peek_chunk::<5>().is_none());
     assert_eq!(cursor.as_bytes(), b"");
+    assert_eq!(cursor.original(), BUF);
 
     // empty buffer
     let cursor = Cursor::new(b"");
@@ -301,12 +302,11 @@ fn test_cursor_advance() {
 }
 
 #[test]
-fn test_cursor_pop_front() {
+fn test_cursor_next() {
     const BUF: [u8; 12] = *b"Content-Type";
     const BUF_LEN: usize = BUF.len();
 
-    let bytes = &BUF[..];
-    let mut cursor = Cursor::new(bytes);
+    let mut cursor = Cursor::new(&BUF[..]);
 
     assert_eq!(cursor.steps(), 0);
     assert_eq!(cursor.remaining(), BUF_LEN);
@@ -339,6 +339,7 @@ fn test_cursor_pop_front() {
     assert!(cursor.peek_chunk::<5>().is_none());
     assert_eq!(cursor.steps(), BUF_LEN);
     assert_eq!(cursor.as_bytes(), b"");
+    assert_eq!(cursor.original(), BUF);
 
     // empty buffer
     let mut cursor = Cursor::new(b"");
@@ -346,4 +347,21 @@ fn test_cursor_pop_front() {
     assert!(cursor.next().is_none());
     assert!(cursor.next_chunk::<2>().is_none());
     assert_eq!(cursor.as_bytes(), b"");
+}
+
+#[test]
+fn test_next_find() {
+    const BUF: [u8; 12] = *b"Content-Type";
+
+    let mut cursor = Cursor::new(&BUF[..]);
+    assert_eq!(cursor.next_find(b'-'), Some(&b"Content"[..]));
+    assert_eq!(cursor.as_bytes(), &b"-Type"[..]);
+
+    let mut cursor = Cursor::new(&BUF[..]);
+    assert_eq!(cursor.next_until(b'-'), Some(&b"Content-"[..]));
+    assert_eq!(cursor.as_bytes(), &b"Type"[..]);
+
+    let mut cursor = Cursor::new(&BUF[..]);
+    assert_eq!(cursor.next_split(b'-'), Some(&b"Content"[..]));
+    assert_eq!(cursor.as_bytes(), &b"Type"[..]);
 }
