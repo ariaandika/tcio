@@ -227,10 +227,15 @@ pub fn slice_of(range: std::ops::Range<usize>, buf: &[u8]) -> &[u8] {
 /// Raw bytes cursor.
 ///
 /// Provides an API for bytes reading, with unsafe methods that skip bounds checking.
+///
+/// The safe API is in `peek*` and `next*` methods.
 #[derive(Debug)]
 pub struct Cursor<'a> {
+    /// Pointer to the start of the slice
     start: *const u8,
+    /// Pointer to the current cursor.
     cursor: *const u8,
+    /// Pointer to the byte after the last byte, dereferencing this is UB
     end: usize,
     _p: std::marker::PhantomData<&'a ()>,
 }
@@ -247,9 +252,9 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    /// Returns how many [`Cursor`] has step forward.
+    /// Returns how many [`Cursor`] has stepped forward.
     #[inline]
-    pub fn step(&self) -> usize {
+    pub fn steps(&self) -> usize {
         (self.cursor as usize) - (self.start as usize)
     }
 
@@ -277,9 +282,11 @@ impl<'a> Cursor<'a> {
         unsafe { std::slice::from_raw_parts(self.cursor, self.end - self.cursor as usize) }
     }
 
-    /// Try get the first byte.
+    // ===== Operations =====
+
+    /// Try get the first byte without advancing cursor.
     #[inline]
-    pub fn first(&self) -> Option<u8> {
+    pub fn peek(&self) -> Option<u8> {
         if (self.cursor as usize) < self.end {
             // SAFETY: start is still in bounds
             Some(unsafe { *self.cursor })
@@ -288,9 +295,9 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    /// Try get the first `N`-th bytes.
+    /// Try get the first `N`-th bytes without advancing cursor.
     #[inline]
-    pub fn first_chunk<const N: usize>(&self) -> Option<&[u8; N]> {
+    pub fn peek_chunk<const N: usize>(&self) -> Option<&[u8; N]> {
         if (self.cursor as usize) + N <= self.end {
             // SAFETY: start + N is still in bounds
             Some(unsafe { &*self.cursor.cast() })
@@ -299,9 +306,13 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    /// Try get the first byte, and advance the cursor by `1`.
+    /// Try get the first byte and advance the cursor by `1`.
     #[inline]
-    pub fn pop_front(&mut self) -> Option<u8> {
+    #[allow(clippy::should_implement_trait, reason = "specialized Iterator, see note below")]
+    pub fn next(&mut self) -> Option<u8> {
+        // no impl Iterator, though this IS an Iterator, but all the method is optimized for bytes,
+        // so callers can be mistaken to call the blanket method from Iterator trait
+
         if (self.cursor as usize) < self.end {
             // SAFETY: start is still in bounds
             unsafe {
@@ -314,15 +325,72 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    /// Try get the first `N`-th bytes, and advance the cursor by `N`.
+    /// Try get the first `N`-th bytes and advance the cursor by `N`.
     #[inline]
-    pub fn pop_chunk_front<const N: usize>(&mut self) -> Option<&[u8; N]> {
+    pub fn next_chunk<const N: usize>(&mut self) -> Option<&'a [u8; N]> {
         if (self.cursor as usize) + N <= self.end {
             // SAFETY: start + N is still in bounds
             unsafe {
                 let val = &*self.cursor.cast();
                 self.advance(N);
                 Some(val)
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Returns chunk until the first found `byte`, and advance cursor to `byte`.
+    ///
+    /// The returned chunk will excludes `byte`, and current cursor still contains `byte`.
+    ///
+    /// If `byte` is not found, returns `None`, and cursor is not advanced.
+    #[inline]
+    pub fn next_find(&mut self, byte: u8) -> Option<&'a [u8]> {
+        if let Some(n) = find(self.as_bytes(), byte) {
+            // SAFETY: checked by `.position()`
+            unsafe {
+                let chunk = std::slice::from_raw_parts(self.start, n);
+                self.advance(n);
+                Some(chunk)
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Returns chunk to the first found `byte`, and advance cursor past `byte`.
+    ///
+    /// The returned chunk will include the `byte`, and current cursor will not contains `byte`.
+    ///
+    /// If `byte` is not found, returns `None`, and cursor is not advanced.
+    #[inline]
+    pub fn next_until(&mut self, byte: u8) -> Option<&'a [u8]> {
+        if let Some(n) = find(self.as_bytes(), byte) {
+            // SAFETY: checked by `.position()`
+            unsafe {
+                let chunk = std::slice::from_raw_parts(self.start, n + 1);
+                self.advance(n + 1);
+                Some(chunk)
+            }
+        } else {
+            None
+        }
+    }
+
+    /// Returns chunk until the first found `byte`, and advance cursor past `byte`.
+    ///
+    /// The returned chunk will excludes the `byte`, and current cursor will not contains `byte`.
+    ///
+    /// If `byte` is not found, returns `None`, and cursor is not advanced.
+    #[inline]
+    pub fn next_split(&mut self, byte: u8) -> Option<&'a [u8]> {
+        if let Some(n) = find(self.as_bytes(), byte) {
+            // SAFETY: checked by `.position()`
+            unsafe {
+                let chunk = std::slice::from_raw_parts(self.start, n);
+                self.advance(n + 1);
+                Some(chunk)
             }
         } else {
             None
@@ -358,23 +426,44 @@ impl<'a> Cursor<'a> {
     }
 }
 
-impl Iterator for Cursor<'_> {
-    type Item = u8;
+fn find(mut value: &[u8], byte: u8) -> Option<usize> {
+    const CHUNK_SIZE: usize = size_of::<usize>();
+    const LSB: usize = usize::from_ne_bytes([1; CHUNK_SIZE]);
+    const MSB: usize = usize::from_ne_bytes([128; CHUNK_SIZE]);
 
-    fn next(&mut self) -> Option<Self::Item> {
-        self.pop_front()
-    }
+    let start = value.as_ptr();
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let len = self.remaining();
-        (len, Some(len))
+    loop {
+        match value.split_first_chunk() {
+            Some((&chunk, rest)) => {
+                // SWAR
+
+                let x = usize::from_ne_bytes(chunk);
+                let target = usize::from_ne_bytes([byte; CHUNK_SIZE]);
+
+                let xor_x = x ^ target;
+                let found = xor_x.wrapping_sub(LSB) & !xor_x & MSB;
+
+                if found != 0 {
+                    return Some(
+                        distance(start, value.as_ptr()) + (found.trailing_zeros() / 8) as usize,
+                    );
+                }
+
+                value = rest;
+            }
+            None => {
+                return value
+                    .iter()
+                    .position(|e| e == &byte)
+                    .map(|pos| distance(start, value.as_ptr()) + pos);
+            }
+        }
     }
 }
 
-impl ExactSizeIterator for Cursor<'_> {
-    fn len(&self) -> usize {
-        self.remaining()
-    }
+fn distance(start: *const u8, end: *const u8) -> usize {
+    unsafe { usize::try_from(end.offset_from(start)).unwrap_unchecked() }
 }
 
 #[test]
@@ -384,14 +473,14 @@ fn test_cursor_advance() {
 
     let mut cursor = Cursor::new(&BUF[..]);
 
-    assert_eq!(cursor.step(), 0);
+    assert_eq!(cursor.steps(), 0);
     assert_eq!(cursor.remaining(), BUF.len());
     assert_eq!(cursor.as_bytes(), BUF);
 
-    assert_eq!(cursor.first(), Some(b'C'));
-    assert_eq!(cursor.first_chunk::<0>(), Some(b""));
-    assert_eq!(cursor.first_chunk::<2>(), Some(b"Co"));
-    assert_eq!(cursor.first_chunk::<13>(), None);
+    assert_eq!(cursor.peek(), Some(b'C'));
+    assert_eq!(cursor.peek_chunk::<0>(), Some(b""));
+    assert_eq!(cursor.peek_chunk::<2>(), Some(b"Co"));
+    assert_eq!(cursor.peek_chunk::<13>(), None);
 
     // SAFETY: checked with `first_chunk::<2>`
     unsafe { cursor.advance(2) };
@@ -399,29 +488,29 @@ fn test_cursor_advance() {
     const REST: [u8; 10] = *b"ntent-Type";
     const REST_LEN: usize = REST.len();
 
-    assert_eq!(cursor.step(), 2);
+    assert_eq!(cursor.steps(), 2);
     assert_eq!(cursor.remaining(), REST_LEN);
     assert_eq!(cursor.as_bytes(), REST);
 
-    assert_eq!(cursor.first(), Some(b'n'));
-    assert_eq!(cursor.first_chunk::<0>(), Some(b""));
-    assert_eq!(cursor.first_chunk::<REST_LEN>(), Some(&REST));
-    assert_eq!(cursor.first_chunk::<BUF_LEN>(), None);
+    assert_eq!(cursor.peek(), Some(b'n'));
+    assert_eq!(cursor.peek_chunk::<0>(), Some(b""));
+    assert_eq!(cursor.peek_chunk::<REST_LEN>(), Some(&REST));
+    assert_eq!(cursor.peek_chunk::<BUF_LEN>(), None);
 
     // SAFETY: checked with `first_chunk::<REST_LEN>`
     unsafe { cursor.advance(REST_LEN) };
 
-    assert_eq!(cursor.step(), BUF_LEN);
+    assert_eq!(cursor.steps(), BUF_LEN);
     assert!(!cursor.has_remaining());
-    assert!(cursor.first().is_none());
-    assert!(cursor.first_chunk::<5>().is_none());
+    assert!(cursor.peek().is_none());
+    assert!(cursor.peek_chunk::<5>().is_none());
     assert_eq!(cursor.as_bytes(), b"");
 
     // empty buffer
     let cursor = Cursor::new(b"");
     assert!(!cursor.has_remaining());
-    assert!(cursor.first().is_none());
-    assert!(cursor.first_chunk::<2>().is_none());
+    assert!(cursor.peek().is_none());
+    assert!(cursor.peek_chunk::<2>().is_none());
 }
 
 #[test]
@@ -432,42 +521,42 @@ fn test_cursor_pop_front() {
     let bytes = &BUF[..];
     let mut cursor = Cursor::new(bytes);
 
-    assert_eq!(cursor.step(), 0);
+    assert_eq!(cursor.steps(), 0);
     assert_eq!(cursor.remaining(), BUF_LEN);
     assert_eq!(cursor.as_bytes(), BUF);
 
-    assert_eq!(cursor.first(), Some(b'C'));
-    assert_eq!(cursor.first_chunk::<0>(), Some(b""));
-    assert_eq!(cursor.first_chunk::<2>(), Some(b"Co"));
-    assert_eq!(cursor.first_chunk::<13>(), None);
+    assert_eq!(cursor.peek(), Some(b'C'));
+    assert_eq!(cursor.peek_chunk::<0>(), Some(b""));
+    assert_eq!(cursor.peek_chunk::<2>(), Some(b"Co"));
+    assert_eq!(cursor.peek_chunk::<13>(), None);
 
-    assert_eq!(cursor.pop_front(), Some(b'C'));
-    assert_eq!(cursor.pop_front(), Some(b'o'));
+    assert_eq!(cursor.next(), Some(b'C'));
+    assert_eq!(cursor.next(), Some(b'o'));
 
     const REST: [u8; 10] = *b"ntent-Type";
     const REST_LEN: usize = REST.len();
 
-    assert_eq!(cursor.step(), 2);
+    assert_eq!(cursor.steps(), 2);
     assert_eq!(cursor.remaining(), REST_LEN);
     assert_eq!(cursor.as_bytes(), REST);
 
-    assert_eq!(cursor.first(), Some(b'n'));
-    assert_eq!(cursor.first_chunk::<0>(), Some(b""));
-    assert_eq!(cursor.first_chunk::<REST_LEN>(), Some(&REST));
-    assert_eq!(cursor.first_chunk::<BUF_LEN>(), None);
+    assert_eq!(cursor.peek(), Some(b'n'));
+    assert_eq!(cursor.peek_chunk::<0>(), Some(b""));
+    assert_eq!(cursor.peek_chunk::<REST_LEN>(), Some(&REST));
+    assert_eq!(cursor.peek_chunk::<BUF_LEN>(), None);
 
-    assert_eq!(cursor.pop_chunk_front::<REST_LEN>(), Some(&REST));
+    assert_eq!(cursor.next_chunk::<REST_LEN>(), Some(&REST));
 
     assert!(!cursor.has_remaining());
-    assert!(cursor.first().is_none());
-    assert!(cursor.first_chunk::<5>().is_none());
-    assert_eq!(cursor.step(), BUF_LEN);
+    assert!(cursor.peek().is_none());
+    assert!(cursor.peek_chunk::<5>().is_none());
+    assert_eq!(cursor.steps(), BUF_LEN);
     assert_eq!(cursor.as_bytes(), b"");
 
     // empty buffer
     let mut cursor = Cursor::new(b"");
     assert!(!cursor.has_remaining());
-    assert!(cursor.pop_front().is_none());
-    assert!(cursor.pop_chunk_front::<2>().is_none());
+    assert!(cursor.next().is_none());
+    assert!(cursor.next_chunk::<2>().is_none());
     assert_eq!(cursor.as_bytes(), b"");
 }
