@@ -1,3 +1,17 @@
+/// Pointer operations.
+macro_rules! ptr {
+    (len($s:expr, $e:expr)) => {{
+        debug_assert!($e >= $s);
+        usize::try_from($e.offset_from($s)).unwrap_unchecked()
+    }};
+    ($add:ident($s:expr, $e:expr)) => {
+        unsafe { $s.$add($e) }
+    };
+    ($s:expr => $e:expr) => {
+        unsafe { ptr!(len($s, $e)) }
+    };
+}
+
 /// Raw bytes cursor.
 ///
 /// Provides an API for bytes reading, with unsafe methods that skip bounds checking.
@@ -9,8 +23,8 @@ pub struct Cursor<'a> {
     start: *const u8,
     /// Pointer to the current cursor.
     cursor: *const u8,
-    /// Pointer to the byte after the last byte, dereferencing this is UB
-    end: usize,
+    /// Pointer to the byte after the last byte.
+    end: *const u8,
     _p: std::marker::PhantomData<&'a ()>,
 }
 
@@ -21,7 +35,7 @@ impl<'a> Cursor<'a> {
         Self {
             start: buf.as_ptr(),
             cursor: buf.as_ptr(),
-            end: buf.as_ptr() as usize + buf.len(),
+            end: ptr!(add(buf.as_ptr(), buf.len())),
             _p: std::marker::PhantomData,
         }
     }
@@ -29,13 +43,13 @@ impl<'a> Cursor<'a> {
     /// Returns how many [`Cursor`] has stepped forward.
     #[inline]
     pub fn steps(&self) -> usize {
-        (self.cursor as usize) - (self.start as usize)
+        ptr!(self.start => self.cursor)
     }
 
     /// Returns the remaining bytes length.
     #[inline]
     pub fn remaining(&self) -> usize {
-        self.end - self.cursor as usize
+        ptr!(self.cursor => self.end)
     }
 
     /// Returns `true` if there is more bytes left.
@@ -47,13 +61,13 @@ impl<'a> Cursor<'a> {
     /// Returns the original bytes.
     #[inline]
     pub fn original(&self) -> &'a [u8] {
-        unsafe { std::slice::from_raw_parts(self.start, self.end - self.start as usize) }
+        unsafe { std::slice::from_raw_parts(self.start, ptr!(len(self.start, self.end))) }
     }
 
     /// Returns the remaining bytes.
     #[inline]
     pub fn as_bytes(&self) -> &'a [u8] {
-        unsafe { std::slice::from_raw_parts(self.cursor, self.end - self.cursor as usize) }
+        unsafe { std::slice::from_raw_parts(self.cursor, ptr!(len(self.cursor, self.end))) }
     }
 
     // ===== Operations =====
@@ -61,22 +75,23 @@ impl<'a> Cursor<'a> {
     /// Try get the first byte without advancing cursor.
     #[inline]
     pub fn peek(&self) -> Option<u8> {
-        if (self.cursor as usize) < self.end {
+        if self.cursor == self.end {
+            None
+        } else {
+            debug_assert!(self.cursor < self.end);
             // SAFETY: start is still in bounds
             Some(unsafe { *self.cursor })
-        } else {
-            None
         }
     }
 
     /// Try get the first `N`-th bytes without advancing cursor.
     #[inline]
     pub fn peek_chunk<const N: usize>(&self) -> Option<&[u8; N]> {
-        if (self.cursor as usize) + N <= self.end {
+        if ptr!(add(self.cursor, N)) > self.end {
+            None
+        } else {
             // SAFETY: start + N is still in bounds
             Some(unsafe { &*self.cursor.cast() })
-        } else {
-            None
         }
     }
 
@@ -90,30 +105,31 @@ impl<'a> Cursor<'a> {
         // no impl Iterator, though this IS an Iterator, but all the method is optimized for bytes,
         // so callers can be mistaken to call the blanket method from Iterator trait
 
-        if (self.cursor as usize) < self.end {
+        if self.cursor == self.end {
+            None
+        } else {
+            debug_assert!(self.cursor < self.end);
             // SAFETY: start is still in bounds
             unsafe {
                 let val = *self.cursor;
                 self.advance(1);
                 Some(val)
             }
-        } else {
-            None
         }
     }
 
     /// Try get the first `N`-th bytes and advance the cursor by `N`.
     #[inline]
     pub fn next_chunk<const N: usize>(&mut self) -> Option<&'a [u8; N]> {
-        if (self.cursor as usize) + N <= self.end {
+        if ptr!(add(self.cursor, N)) > self.end {
+            None
+        } else {
             // SAFETY: start + N is still in bounds
             unsafe {
                 let val = &*self.cursor.cast();
                 self.advance(N);
                 Some(val)
             }
-        } else {
-            None
         }
     }
 
@@ -124,15 +140,13 @@ impl<'a> Cursor<'a> {
     /// If `byte` is not found, returns `None`, and cursor is not advanced.
     #[inline]
     pub fn next_find(&mut self, byte: u8) -> Option<&'a [u8]> {
-        if let Some(n) = find(self.as_bytes(), byte) {
-            // SAFETY: checked by `.position()`
-            unsafe {
-                let chunk = std::slice::from_raw_parts(self.start, n);
+        match find(self.as_bytes(), byte) {
+            Some(n) => unsafe {
+                let chunk = std::slice::from_raw_parts(self.cursor, n);
                 self.advance(n);
                 Some(chunk)
-            }
-        } else {
-            None
+            },
+            None => None,
         }
     }
 
@@ -144,7 +158,7 @@ impl<'a> Cursor<'a> {
     #[inline]
     pub fn next_until(&mut self, byte: u8) -> Option<&'a [u8]> {
         if let Some(n) = find(self.as_bytes(), byte) {
-            // SAFETY: checked by `.position()`
+            // SAFETY: checked by `find`
             unsafe {
                 let chunk = std::slice::from_raw_parts(self.start, n + 1);
                 self.advance(n + 1);
@@ -163,7 +177,7 @@ impl<'a> Cursor<'a> {
     #[inline]
     pub fn next_split(&mut self, byte: u8) -> Option<&'a [u8]> {
         if let Some(n) = find(self.as_bytes(), byte) {
-            // SAFETY: checked by `.position()`
+            // SAFETY: checked by `find`
             unsafe {
                 let chunk = std::slice::from_raw_parts(self.start, n);
                 self.advance(n + 1);
@@ -182,7 +196,7 @@ impl<'a> Cursor<'a> {
     #[inline]
     pub unsafe fn advance(&mut self, n: usize) {
         debug_assert!(
-            (self.cursor as usize) + n <= self.end,
+            ptr!(add(self.cursor, n)) <= self.end,
             "`Cursor::advance` safety violated, advancing `n` is out of bounds"
         );
         unsafe { self.cursor = self.cursor.add(n) };
@@ -223,7 +237,7 @@ fn find(mut value: &[u8], byte: u8) -> Option<usize> {
 
                 if found != 0 {
                     return Some(
-                        distance(start, value.as_ptr()) + (found.trailing_zeros() / 8) as usize,
+                        ptr!(start => value.as_ptr()) + (found.trailing_zeros() / 8) as usize,
                     );
                 }
 
@@ -233,14 +247,10 @@ fn find(mut value: &[u8], byte: u8) -> Option<usize> {
                 return value
                     .iter()
                     .position(|e| e == &byte)
-                    .map(|pos| distance(start, value.as_ptr()) + pos);
+                    .map(|pos| ptr!(start => value.as_ptr()) + pos);
             }
         }
     }
-}
-
-fn distance(start: *const u8, end: *const u8) -> usize {
-    unsafe { usize::try_from(end.offset_from(start)).unwrap_unchecked() }
 }
 
 #[test]
