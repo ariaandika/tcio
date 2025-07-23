@@ -1,8 +1,14 @@
+use std::slice::from_raw_parts as slice;
+
 /// Pointer operations.
 macro_rules! ptr {
+    (slice($s:expr, $e:expr)) => {{
+        debug_assert!($e >= $s);
+        unsafe { slice($s, $e.offset_from($s) as _) }
+    }};
     (len($s:expr, $e:expr)) => {{
         debug_assert!($e >= $s);
-        usize::try_from($e.offset_from($s)).unwrap_unchecked()
+        $e.offset_from($s) as usize
     }};
     ($add:ident($s:expr, $e:expr)) => {
         unsafe { $s.$add($e) }
@@ -61,13 +67,13 @@ impl<'a> Cursor<'a> {
     /// Returns the original bytes.
     #[inline]
     pub fn original(&self) -> &'a [u8] {
-        unsafe { std::slice::from_raw_parts(self.start, ptr!(len(self.start, self.end))) }
+        ptr!(slice(self.start, self.end))
     }
 
     /// Returns the remaining bytes.
     #[inline]
     pub fn as_bytes(&self) -> &'a [u8] {
-        unsafe { std::slice::from_raw_parts(self.cursor, ptr!(len(self.cursor, self.end))) }
+        ptr!(slice(self.cursor, self.end))
     }
 
     // ===== Operations =====
@@ -126,7 +132,7 @@ impl<'a> Cursor<'a> {
         } else {
             // SAFETY: start + N is still in bounds
             unsafe {
-                let val = &*self.cursor.cast();
+                let val = &*(self.cursor as *const [u8; N]);
                 self.advance(N);
                 Some(val)
             }
@@ -140,10 +146,11 @@ impl<'a> Cursor<'a> {
     /// If `byte` is not found, returns `None`, and cursor is not advanced.
     #[inline]
     pub fn next_find(&mut self, byte: u8) -> Option<&'a [u8]> {
-        match find(self.as_bytes(), byte) {
-            Some(n) => unsafe {
-                let chunk = std::slice::from_raw_parts(self.cursor, n);
-                self.advance(n);
+        match self.find_raw(byte) {
+            // SAFETY: checked by `find_raw`
+            Some(len) => unsafe {
+                let chunk = slice(self.cursor, len);
+                self.advance(len);
                 Some(chunk)
             },
             None => None,
@@ -157,15 +164,14 @@ impl<'a> Cursor<'a> {
     /// If `byte` is not found, returns `None`, and cursor is not advanced.
     #[inline]
     pub fn next_until(&mut self, byte: u8) -> Option<&'a [u8]> {
-        if let Some(n) = find(self.as_bytes(), byte) {
-            // SAFETY: checked by `find`
-            unsafe {
-                let chunk = std::slice::from_raw_parts(self.start, n + 1);
-                self.advance(n + 1);
+        match self.find_raw(byte) {
+            // SAFETY: checked by `find_raw`
+            Some(len) => unsafe {
+                let chunk = slice(self.cursor, len + 1);
+                self.advance(len + 1);
                 Some(chunk)
-            }
-        } else {
-            None
+            },
+            None => None,
         }
     }
 
@@ -176,15 +182,14 @@ impl<'a> Cursor<'a> {
     /// If `byte` is not found, returns `None`, and cursor is not advanced.
     #[inline]
     pub fn next_split(&mut self, byte: u8) -> Option<&'a [u8]> {
-        if let Some(n) = find(self.as_bytes(), byte) {
-            // SAFETY: checked by `find`
-            unsafe {
-                let chunk = std::slice::from_raw_parts(self.start, n);
-                self.advance(n + 1);
+        match self.find_raw(byte) {
+            // SAFETY: checked by `find_raw`
+            Some(len) => unsafe {
+                let chunk = slice(self.cursor, len);
+                self.advance(len + 1);
                 Some(chunk)
-            }
-        } else {
-            None
+            },
+            None => None,
         }
     }
 
@@ -215,41 +220,51 @@ impl<'a> Cursor<'a> {
         );
         unsafe { self.cursor = self.cursor.sub(n) };
     }
-}
 
-fn find(mut value: &[u8], byte: u8) -> Option<usize> {
-    const CHUNK_SIZE: usize = size_of::<usize>();
-    const LSB: usize = usize::from_ne_bytes([1; CHUNK_SIZE]);
-    const MSB: usize = usize::from_ne_bytes([128; CHUNK_SIZE]);
+    fn find_raw(&self, byte: u8) -> Option<usize> {
+        const CHUNK_SIZE: usize = size_of::<usize>();
+        const LSB: usize = usize::from_ne_bytes([1; CHUNK_SIZE]);
+        const MSB: usize = usize::from_ne_bytes([128; CHUNK_SIZE]);
 
-    let start = value.as_ptr();
+        let target = usize::from_ne_bytes([byte; CHUNK_SIZE]);
+        let mut current = self.cursor;
 
-    loop {
-        match value.split_first_chunk() {
-            Some((&chunk, rest)) => {
-                // SWAR
-
-                let x = usize::from_ne_bytes(chunk);
-                let target = usize::from_ne_bytes([byte; CHUNK_SIZE]);
-
-                let xor_x = x ^ target;
-                let found = xor_x.wrapping_sub(LSB) & !xor_x & MSB;
-
-                if found != 0 {
-                    return Some(
-                        ptr!(start => value.as_ptr()) + (found.trailing_zeros() / 8) as usize,
-                    );
-                }
-
-                value = rest;
+        loop {
+            let next = ptr!(add(current, CHUNK_SIZE));
+            if next > self.end {
+                break;
             }
-            None => {
-                return value
-                    .iter()
-                    .position(|e| e == &byte)
-                    .map(|pos| ptr!(start => value.as_ptr()) + pos);
+
+            // SAFETY: from previous check, `current` is at least CHUNK_SIZE bytes long
+            let x = usize::from_ne_bytes(unsafe { *(current as *const [u8; CHUNK_SIZE]) });
+
+            let xor_x = x ^ target;
+            let found = xor_x.wrapping_sub(LSB) & !xor_x & MSB;
+
+            if found != 0 {
+                let pos = (found.trailing_zeros() / 8) as usize;
+                let offset = ptr!(self.cursor => current);
+
+                // SAFETY: all ptr derived from allocated slice, so `pos + offset` never point to
+                // invalid allocation
+                return Some(unsafe { pos.unchecked_add(offset) });
+            }
+
+            current = next;
+        }
+
+        while current < self.end {
+            // SAFETY: `current < self.end`, thus still in valid memory
+            unsafe {
+                if *current == byte {
+                    return Some(ptr!(len(self.cursor, current)));
+                } else {
+                    current = current.add(1);
+                }
             }
         }
+
+        None
     }
 }
 
@@ -353,15 +368,19 @@ fn test_cursor_next() {
 fn test_next_find() {
     const BUF: [u8; 12] = *b"Content-Type";
 
-    let mut cursor = Cursor::new(&BUF[..]);
+    let mut cursor = Cursor::new(&BUF);
     assert_eq!(cursor.next_find(b'-'), Some(&b"Content"[..]));
     assert_eq!(cursor.as_bytes(), &b"-Type"[..]);
 
-    let mut cursor = Cursor::new(&BUF[..]);
+    let mut cursor = Cursor::new(&BUF);
     assert_eq!(cursor.next_until(b'-'), Some(&b"Content-"[..]));
     assert_eq!(cursor.as_bytes(), &b"Type"[..]);
 
-    let mut cursor = Cursor::new(&BUF[..]);
+    let mut cursor = Cursor::new(&BUF);
     assert_eq!(cursor.next_split(b'-'), Some(&b"Content"[..]));
     assert_eq!(cursor.as_bytes(), &b"Type"[..]);
+
+    let mut cursor = Cursor::new(&BUF);
+    assert_eq!(cursor.next_find(b'*'), None);
+    assert_eq!(cursor.as_bytes(), &BUF);
 }
