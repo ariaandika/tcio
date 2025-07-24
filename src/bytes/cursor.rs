@@ -292,123 +292,82 @@ fn safe_add(ptr: *const u8, add: usize) -> usize {
     unsafe { (ptr as usize).unchecked_add(add) }
 }
 
-#[test]
-fn test_cursor_advance() {
-    const BUF: [u8; 12] = *b"Content-Type";
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    const BUF: [u8; 23] = *b"Content-Type: text/html";
     const BUF_LEN: usize = BUF.len();
 
-    let mut cursor = Cursor::new(&BUF[..]);
+    const BUF2: [u8; 11] = *b": text/html";
+    const BUF2_LEN: usize = BUF2.len();
+    const BUF2_ADV: usize = BUF_LEN - BUF2_LEN;
 
-    assert_eq!(cursor.steps(), 0);
-    assert_eq!(cursor.remaining(), BUF.len());
-    assert_eq!(cursor.as_bytes(), BUF);
+    #[test]
+    fn test_cursor_empty() {
+        let mut cursor = Cursor::new(b"");
 
-    assert_eq!(cursor.peek(), Some(b'C'));
-    assert_eq!(cursor.peek_chunk::<0>(), Some(b""));
-    assert_eq!(cursor.peek_chunk::<2>(), Some(b"Co"));
-    assert_eq!(cursor.peek_chunk::<13>(), None);
+        assert_eq!(cursor.peek(), None);
+        assert_eq!(cursor.peek_chunk::<0>(), Some(&[]));
+        assert_eq!(cursor.peek_chunk::<2>(), None);
+        assert_eq!(cursor.next(), None);
+        assert_eq!(cursor.next_chunk::<0>(), Some(&[]));
+        assert_eq!(cursor.next_chunk::<2>(), None);
+    }
 
-    // SAFETY: checked with `first_chunk::<2>`
-    unsafe { cursor.advance(2) };
+    #[test]
+    fn test_cursor_peek() {
+        let mut cursor = Cursor::new(&BUF[..]);
 
-    const REST: [u8; 10] = *b"ntent-Type";
-    const REST_LEN: usize = REST.len();
+        assert_eq!(cursor.peek(), BUF.first().copied());
+        assert_eq!(cursor.peek_chunk::<0>(), Some(&[]));
+        assert_eq!(cursor.peek_chunk::<2>(), BUF.first_chunk::<2>());
+        assert_eq!(cursor.peek_chunk::<BUF_LEN>(), Some(&BUF));
+        assert_eq!(cursor.peek_chunk::<{ BUF_LEN + 1 }>(), None);
 
-    assert_eq!(cursor.steps(), 2);
-    assert_eq!(cursor.remaining(), REST_LEN);
-    assert_eq!(cursor.as_bytes(), REST);
+        unsafe { cursor.advance(BUF2_ADV) };
 
-    assert_eq!(cursor.peek(), Some(b'n'));
-    assert_eq!(cursor.peek_chunk::<0>(), Some(b""));
-    assert_eq!(cursor.peek_chunk::<REST_LEN>(), Some(&REST));
-    assert_eq!(cursor.peek_chunk::<BUF_LEN>(), None);
+        assert_eq!(cursor.peek(), BUF2.first().copied());
+        assert_eq!(cursor.peek_chunk::<0>(), Some(&[]));
+        assert_eq!(cursor.peek_chunk::<2>(), BUF2.first_chunk::<2>());
+        assert_eq!(cursor.peek_chunk::<BUF2_LEN>(), Some(&BUF2));
+        assert_eq!(cursor.peek_chunk::<{ BUF2_LEN + 1 }>(), None);
+    }
 
-    // SAFETY: checked with `first_chunk::<REST_LEN>`
-    unsafe { cursor.advance(REST_LEN) };
+    #[test]
+    fn test_cursor_next() {
+        let mut cursor = Cursor::new(&BUF[..]);
 
-    assert_eq!(cursor.steps(), BUF_LEN);
-    assert!(!cursor.has_remaining());
-    assert!(cursor.peek().is_none());
-    assert!(cursor.peek_chunk::<5>().is_none());
-    assert_eq!(cursor.as_bytes(), b"");
-    assert_eq!(cursor.original(), BUF);
+        assert_eq!(cursor.next_chunk::<0>(), Some(&[]));
+        assert_eq!(cursor.as_bytes(), &BUF[..]);
 
-    // empty buffer
-    let cursor = Cursor::new(b"");
-    assert!(!cursor.has_remaining());
-    assert!(cursor.peek().is_none());
-    assert!(cursor.peek_chunk::<2>().is_none());
-}
+        assert_eq!(cursor.next(), BUF.first().copied());
+        assert_eq!(cursor.next_chunk::<2>(), BUF[1..].first_chunk::<2>());
+        assert_eq!(cursor.next_chunk::<{ BUF_LEN - 3 }>(), BUF[3..].first_chunk::<{ BUF_LEN - 3 }>());
+    }
 
-#[test]
-fn test_cursor_next() {
-    const BUF: [u8; 12] = *b"Content-Type";
-    const BUF_LEN: usize = BUF.len();
+    #[test]
+    fn test_next_find() {
+        const BUF: [u8; 14] = *b"Content-Type: ";
 
-    let mut cursor = Cursor::new(&BUF[..]);
+        let mut cursor = Cursor::new(&BUF);
+        assert_eq!(cursor.next_find(b'-'), Some(&b"Content"[..]));
+        assert_eq!(cursor.as_bytes(), &b"-Type: "[..]);
 
-    assert_eq!(cursor.steps(), 0);
-    assert_eq!(cursor.remaining(), BUF_LEN);
-    assert_eq!(cursor.as_bytes(), BUF);
+        let mut cursor = Cursor::new(&BUF);
+        assert_eq!(cursor.next_until(b'-'), Some(&b"Content-"[..]));
+        assert_eq!(cursor.as_bytes(), &b"Type: "[..]);
 
-    assert_eq!(cursor.peek(), Some(b'C'));
-    assert_eq!(cursor.peek_chunk::<0>(), Some(b""));
-    assert_eq!(cursor.peek_chunk::<2>(), Some(b"Co"));
-    assert_eq!(cursor.peek_chunk::<13>(), None);
+        let mut cursor = Cursor::new(&BUF);
+        assert_eq!(cursor.next_split(b'-'), Some(&b"Content"[..]));
+        assert_eq!(cursor.as_bytes(), &b"Type: "[..]);
 
-    assert_eq!(cursor.next(), Some(b'C'));
-    assert_eq!(cursor.next(), Some(b'o'));
+        let mut cursor = Cursor::new(&BUF);
+        assert_eq!(cursor.next_find(b':'), Some(&b"Content-Type"[..]));
+        assert_eq!(cursor.as_bytes(), &b": "[..]);
 
-    const REST: [u8; 10] = *b"ntent-Type";
-    const REST_LEN: usize = REST.len();
-
-    assert_eq!(cursor.steps(), 2);
-    assert_eq!(cursor.remaining(), REST_LEN);
-    assert_eq!(cursor.as_bytes(), REST);
-
-    assert_eq!(cursor.peek(), Some(b'n'));
-    assert_eq!(cursor.peek_chunk::<0>(), Some(b""));
-    assert_eq!(cursor.peek_chunk::<REST_LEN>(), Some(&REST));
-    assert_eq!(cursor.peek_chunk::<BUF_LEN>(), None);
-
-    assert_eq!(cursor.next_chunk::<REST_LEN>(), Some(&REST));
-
-    assert!(!cursor.has_remaining());
-    assert!(cursor.peek().is_none());
-    assert!(cursor.peek_chunk::<5>().is_none());
-    assert_eq!(cursor.steps(), BUF_LEN);
-    assert_eq!(cursor.as_bytes(), b"");
-    assert_eq!(cursor.original(), BUF);
-
-    // empty buffer
-    let mut cursor = Cursor::new(b"");
-    assert!(!cursor.has_remaining());
-    assert!(cursor.next().is_none());
-    assert!(cursor.next_chunk::<2>().is_none());
-    assert_eq!(cursor.as_bytes(), b"");
-}
-
-#[test]
-fn test_next_find() {
-    const BUF: [u8; 14] = *b"Content-Type: ";
-
-    let mut cursor = Cursor::new(&BUF);
-    assert_eq!(cursor.next_find(b'-'), Some(&b"Content"[..]));
-    assert_eq!(cursor.as_bytes(), &b"-Type: "[..]);
-
-    let mut cursor = Cursor::new(&BUF);
-    assert_eq!(cursor.next_until(b'-'), Some(&b"Content-"[..]));
-    assert_eq!(cursor.as_bytes(), &b"Type: "[..]);
-
-    let mut cursor = Cursor::new(&BUF);
-    assert_eq!(cursor.next_split(b'-'), Some(&b"Content"[..]));
-    assert_eq!(cursor.as_bytes(), &b"Type: "[..]);
-
-    let mut cursor = Cursor::new(&BUF);
-    assert_eq!(cursor.next_find(b':'), Some(&b"Content-Type"[..]));
-    assert_eq!(cursor.as_bytes(), &b": "[..]);
-
-    let mut cursor = Cursor::new(&BUF);
-    assert_eq!(cursor.next_find(b'*'), None);
-    assert_eq!(cursor.as_bytes(), &BUF);
+        let mut cursor = Cursor::new(&BUF);
+        assert_eq!(cursor.next_find(b'*'), None);
+        assert_eq!(cursor.as_bytes(), &BUF);
+    }
 }
