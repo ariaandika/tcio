@@ -224,6 +224,42 @@ impl<'a> Cursor<'a> {
         debug_invariant!(self);
     }
 
+    // ===== Forking =====
+
+    /// Copy the internal state to a new [`Cursor`].
+    ///
+    /// This can be usefull for more complex peeking before advancing the cursor.
+    ///
+    /// When peeking complete, use [`Cursor::apply`] or [`Cursor::apply_to`] to apply the forked
+    /// state to the parent [`Cursor`].
+    #[inline]
+    pub fn fork(&self) -> Cursor<'a> {
+        Cursor {
+            start: self.start,
+            cursor: self.cursor,
+            end: self.end,
+            _p: std::marker::PhantomData,
+        }
+    }
+
+    /// Apply other [`Cursor`] state to this [`Cursor`].
+    ///
+    /// This is intented to be used with [`Cursor::fork`] after completed peeking.
+    #[inline]
+    pub fn apply(&mut self, cursor: Cursor<'a>) {
+        *self = cursor;
+    }
+
+    /// Apply current state to other [`Cursor`].
+    ///
+    /// This is intented to be used with [`Cursor::fork`] after completed peeking.
+    #[inline]
+    pub fn apply_to(self, other: &mut Cursor<'a>) {
+        *other = self;
+    }
+
+    // ===== Internal =====
+
     fn find_raw(&self, byte: u8) -> Option<usize> {
         const CHUNK_SIZE: usize = size_of::<usize>();
         const LSB: usize = usize::from_ne_bytes([1; CHUNK_SIZE]);
