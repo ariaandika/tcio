@@ -1,21 +1,10 @@
 use std::slice::from_raw_parts as slice;
 
-/// Pointer operations.
-macro_rules! ptr {
-    (slice($s:expr, $e:expr)) => {{
-        debug_assert!($e >= $s);
-        unsafe { slice($s, $e.offset_from($s) as _) }
+macro_rules! debug_invariant {
+    ($me:ident) => {{
+        debug_assert!($me.start <= $me.cursor, "`Cursor` invariant violated");
+        debug_assert!($me.cursor <= $me.end, "`Cursor` invariant violated");
     }};
-    (len($s:expr, $e:expr)) => {{
-        debug_assert!($e >= $s);
-        $e.offset_from($s) as usize
-    }};
-    ($add:ident($s:expr, $e:expr)) => {
-        unsafe { $s.$add($e) }
-    };
-    ($s:expr => $e:expr) => {
-        unsafe { ptr!(len($s, $e)) }
-    };
 }
 
 /// Raw bytes cursor.
@@ -23,6 +12,10 @@ macro_rules! ptr {
 /// Provides an API for bytes reading, with unsafe methods that skip bounds checking.
 ///
 /// The safe API is in `peek*` and `next*` methods.
+//
+// INVARIANT: self.start <= self.cursor <= self.end
+//
+// note that even if `self.cursor == self.end`, dereferencing to slice would returns empty slice.
 #[derive(Debug)]
 pub struct Cursor<'a> {
     /// Pointer to the start of the slice
@@ -41,7 +34,9 @@ impl<'a> Cursor<'a> {
         Self {
             start: buf.as_ptr(),
             cursor: buf.as_ptr(),
-            end: ptr!(add(buf.as_ptr(), buf.len())),
+            // SAFETY: allocated objects can never be larger than `isize::MAX` bytes,
+            // `self.cursor == self.end` is always safe
+            end: unsafe { buf.as_ptr().add(buf.len()) },
             _p: std::marker::PhantomData,
         }
     }
@@ -49,13 +44,15 @@ impl<'a> Cursor<'a> {
     /// Returns how many [`Cursor`] has stepped forward.
     #[inline]
     pub fn steps(&self) -> usize {
-        ptr!(self.start => self.cursor)
+        // SAFETY: invariant `self.start <= self.cursor`
+        unsafe { offset_from(self.cursor, self.start) }
     }
 
     /// Returns the remaining bytes length.
     #[inline]
     pub fn remaining(&self) -> usize {
-        ptr!(self.cursor => self.end)
+        // SAFETY: invariant `self.cursor <= self.end`
+        unsafe { offset_from(self.end, self.cursor) }
     }
 
     /// Returns `true` if there is more bytes left.
@@ -67,13 +64,15 @@ impl<'a> Cursor<'a> {
     /// Returns the original bytes.
     #[inline]
     pub fn original(&self) -> &'a [u8] {
-        ptr!(slice(self.start, self.end))
+        // SAFETY: invariant `self.start <= self.end`
+        unsafe { slice(self.start, offset_from(self.end, self.start)) }
     }
 
     /// Returns the remaining bytes.
     #[inline]
     pub fn as_bytes(&self) -> &'a [u8] {
-        ptr!(slice(self.cursor, self.end))
+        // SAFETY: invariant `self.cursor <= self.end`
+        unsafe { slice(self.cursor, offset_from(self.end, self.cursor)) }
     }
 
     // ===== Operations =====
@@ -84,7 +83,7 @@ impl<'a> Cursor<'a> {
         if self.cursor == self.end {
             None
         } else {
-            debug_assert!(self.cursor < self.end);
+            debug_invariant!(self);
             // SAFETY: start is still in bounds
             Some(unsafe { *self.cursor })
         }
@@ -93,11 +92,11 @@ impl<'a> Cursor<'a> {
     /// Try get the first `N`-th bytes without advancing cursor.
     #[inline]
     pub fn peek_chunk<const N: usize>(&self) -> Option<&'a [u8; N]> {
-        if ptr!(add(self.cursor, N)) > self.end {
-            None
+        if safe_add(self.cursor, N) <= self.end as usize {
+            // SAFETY: `self.cursor` is valid until `N` bytes
+            Some(unsafe { &*self.cursor.cast::<[u8; N]>() })
         } else {
-            // SAFETY: start + N is still in bounds
-            Some(unsafe { &*self.cursor.cast() })
+            None
         }
     }
 
@@ -114,8 +113,8 @@ impl<'a> Cursor<'a> {
         if self.cursor == self.end {
             None
         } else {
-            debug_assert!(self.cursor < self.end);
-            // SAFETY: start is still in bounds
+            debug_invariant!(self);
+            // SAFETY: `self.cursor` is still in bounds
             unsafe {
                 let val = *self.cursor;
                 self.advance(1);
@@ -127,15 +126,15 @@ impl<'a> Cursor<'a> {
     /// Try get the first `N`-th bytes and advance the cursor by `N`.
     #[inline]
     pub fn next_chunk<const N: usize>(&mut self) -> Option<&'a [u8; N]> {
-        if ptr!(add(self.cursor, N)) > self.end {
-            None
-        } else {
-            // SAFETY: start + N is still in bounds
+        if safe_add(self.cursor, N) <= self.end as usize {
+            // SAFETY: self.cursor is valid until `N` bytes
             unsafe {
-                let val = &*(self.cursor as *const [u8; N]);
+                let val = &*self.cursor.cast::<[u8; N]>();
                 self.advance(N);
                 Some(val)
             }
+        } else {
+            None
         }
     }
 
@@ -201,10 +200,12 @@ impl<'a> Cursor<'a> {
     #[inline]
     pub unsafe fn advance(&mut self, n: usize) {
         debug_assert!(
-            ptr!(add(self.cursor, n)) <= self.end,
+            safe_add(self.cursor, n) <= self.end as usize,
             "`Cursor::advance` safety violated, advancing `n` is out of bounds"
         );
+        // SAFETY: asserted
         unsafe { self.cursor = self.cursor.add(n) };
+        debug_invariant!(self);
     }
 
     /// Move cursor backwards cursor.
@@ -215,10 +216,12 @@ impl<'a> Cursor<'a> {
     #[inline]
     pub unsafe fn step_back(&mut self, n: usize) {
         debug_assert!(
-            (self.cursor as usize) - n >= self.start as usize,
+            (self.cursor as usize).checked_sub(n).unwrap() >= self.start as usize,
             "`Cursor::step_back` safety violated, stepping back `n` is out of bounds"
         );
+        // SAFETY: asserted
         unsafe { self.cursor = self.cursor.sub(n) };
+        debug_invariant!(self);
     }
 
     fn find_raw(&self, byte: u8) -> Option<usize> {
@@ -226,46 +229,67 @@ impl<'a> Cursor<'a> {
         const LSB: usize = usize::from_ne_bytes([1; CHUNK_SIZE]);
         const MSB: usize = usize::from_ne_bytes([128; CHUNK_SIZE]);
 
+        debug_invariant!(self);
+
         let target = usize::from_ne_bytes([byte; CHUNK_SIZE]);
-        let mut current = self.cursor;
+        let end = self.end as usize;
+        let mut cursor = self.cursor;
 
-        loop {
-            let next = ptr!(add(current, CHUNK_SIZE));
-            if next > self.end {
-                break;
-            }
+        // INVARIANT#1: `cursor >= self.cursor`,
+        // cursor only `add`-ed, and `self.cursor` is unchanged
 
-            // SAFETY: from previous check, `current` is at least CHUNK_SIZE bytes long
-            let x = usize::from_ne_bytes(unsafe { *(current as *const [u8; CHUNK_SIZE]) });
+        while safe_add(cursor, CHUNK_SIZE) < end {
+            // SAFETY: by while condition,`cursor` is valid until CHUNK_SIZE bytes
+            let x = usize::from_ne_bytes(unsafe { *(cursor as *const [u8; CHUNK_SIZE]) });
 
+            // SWAR
             let xor_x = x ^ target;
             let found = xor_x.wrapping_sub(LSB) & !xor_x & MSB;
 
             if found != 0 {
                 let pos = (found.trailing_zeros() / 8) as usize;
-                let offset = ptr!(self.cursor => current);
 
-                // SAFETY: all ptr derived from allocated slice, so `pos + offset` never point to
-                // invalid allocation
+                // SAFETY: INVARIANT#1
+                let offset = unsafe { offset_from(cursor, self.cursor) };
+
+                // SAFETY: pointer will never exceed `isize::MAX` so `usize` would never overflow
                 return Some(unsafe { pos.unchecked_add(offset) });
             }
 
-            current = next;
+            // SAFETY: by while condition, `cursor` is valid until CHUNK_SIZE bytes
+            cursor = unsafe { cursor.add(CHUNK_SIZE) };
         }
 
-        while current < self.end {
-            // SAFETY: `current < self.end`, thus still in valid memory
-            unsafe {
-                if *current == byte {
-                    return Some(ptr!(len(self.cursor, current)));
-                } else {
-                    current = current.add(1);
-                }
+        while cursor < self.end {
+            // SAFETY: by while condition, `cursor` still in valid memory
+            if unsafe { *cursor } == byte {
+                // SAFETY: INVARIANT#1
+                return Some(unsafe { offset_from(cursor, self.cursor) });
+            } else {
+                // SAFETY: Because allocated objects can never be larger than `isize::MAX` bytes,
+                // `cursor == self.end` is always safe
+                cursor = unsafe { cursor.add(1) };
             }
         }
 
         None
     }
+}
+
+/// # Safety
+///
+/// `end >= start`
+#[inline]
+unsafe fn offset_from(end: *const u8, start: *const u8) -> usize {
+    // SAFETY: guaranteed by caller that `end >= start`
+    unsafe { usize::try_from(end.offset_from(start)).unwrap_unchecked() }
+}
+
+/// Safely add pointer by casting to usize.
+#[inline]
+fn safe_add(ptr: *const u8, add: usize) -> usize {
+    // SAFETY: pointer will never exceed `isize::MAX` so it would never overflow
+    unsafe { (ptr as usize).unchecked_add(add) }
 }
 
 #[test]
@@ -366,19 +390,23 @@ fn test_cursor_next() {
 
 #[test]
 fn test_next_find() {
-    const BUF: [u8; 12] = *b"Content-Type";
+    const BUF: [u8; 14] = *b"Content-Type: ";
 
     let mut cursor = Cursor::new(&BUF);
     assert_eq!(cursor.next_find(b'-'), Some(&b"Content"[..]));
-    assert_eq!(cursor.as_bytes(), &b"-Type"[..]);
+    assert_eq!(cursor.as_bytes(), &b"-Type: "[..]);
 
     let mut cursor = Cursor::new(&BUF);
     assert_eq!(cursor.next_until(b'-'), Some(&b"Content-"[..]));
-    assert_eq!(cursor.as_bytes(), &b"Type"[..]);
+    assert_eq!(cursor.as_bytes(), &b"Type: "[..]);
 
     let mut cursor = Cursor::new(&BUF);
     assert_eq!(cursor.next_split(b'-'), Some(&b"Content"[..]));
-    assert_eq!(cursor.as_bytes(), &b"Type"[..]);
+    assert_eq!(cursor.as_bytes(), &b"Type: "[..]);
+
+    let mut cursor = Cursor::new(&BUF);
+    assert_eq!(cursor.next_find(b':'), Some(&b"Content-Type"[..]));
+    assert_eq!(cursor.as_bytes(), &b": "[..]);
 
     let mut cursor = Cursor::new(&BUF);
     assert_eq!(cursor.next_find(b'*'), None);
