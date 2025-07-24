@@ -47,14 +47,14 @@ impl<'a> Cursor<'a> {
     #[inline]
     pub fn steps(&self) -> usize {
         // SAFETY: invariant `self.start <= self.cursor`
-        unsafe { offset_from(self.cursor, self.start) }
+        unsafe { self.cursor.offset_from(self.start) as _ }
     }
 
     /// Returns the remaining bytes length.
     #[inline]
     pub fn remaining(&self) -> usize {
         // SAFETY: invariant `self.cursor <= self.end`
-        unsafe { offset_from(self.end, self.cursor) }
+        unsafe { self.end.offset_from(self.cursor) as _ }
     }
 
     /// Returns `true` if there is more bytes left.
@@ -67,14 +67,14 @@ impl<'a> Cursor<'a> {
     #[inline]
     pub fn original(&self) -> &'a [u8] {
         // SAFETY: invariant `self.start <= self.end`
-        unsafe { slice(self.start, offset_from(self.end, self.start)) }
+        unsafe { slice(self.start, self.end.offset_from(self.start) as _) }
     }
 
     /// Returns the remaining bytes.
     #[inline]
     pub fn as_bytes(&self) -> &'a [u8] {
         // SAFETY: invariant `self.cursor <= self.end`
-        unsafe { slice(self.cursor, offset_from(self.end, self.cursor)) }
+        unsafe { slice(self.cursor, self.remaining()) }
     }
 
     // ===== Peek =====
@@ -94,9 +94,9 @@ impl<'a> Cursor<'a> {
     /// Try get the first `N`-th bytes without advancing cursor.
     #[inline]
     pub fn peek_chunk<const N: usize>(&self) -> Option<&'a [u8; N]> {
-        if safe_add(self.cursor, N) <= self.end as usize {
+        if self.remaining() >= N {
             // SAFETY: `self.cursor` is valid until `N` bytes
-            Some(unsafe { &*self.cursor.cast::<[u8; N]>() })
+            Some(unsafe { &*self.cursor.cast() })
         } else {
             None
         }
@@ -130,10 +130,10 @@ impl<'a> Cursor<'a> {
     /// Try get the first `N`-th bytes and advance the cursor by `N`.
     #[inline]
     pub fn next_chunk<const N: usize>(&mut self) -> Option<&'a [u8; N]> {
-        if safe_add(self.cursor, N) <= self.end as usize {
-            // SAFETY: self.cursor is valid until `N` bytes
+        if self.remaining() >= N {
+            // SAFETY: `self.cursor` is valid until `N` bytes
             unsafe {
-                let val = &*self.cursor.cast::<[u8; N]>();
+                let val = &*self.cursor.cast();
                 self.advance(N);
                 Some(val)
             }
@@ -150,9 +150,9 @@ impl<'a> Cursor<'a> {
     ///
     /// If `byte` is not found, returns `None`, and cursor is not advanced.
     #[inline]
-    pub fn next_find(&mut self, byte: u8) -> Option<&'a [u8]> {
-        match self.find_inner(byte) {
-            // SAFETY: checked by `find_inner`
+    pub fn next_find<S: Strategy>(&mut self, strategy: S) -> Option<&'a [u8]> {
+        match self.find_inner(strategy) {
+            // SAFETY: checked by Strategy implementation
             Some(len) => unsafe {
                 let chunk = slice(self.cursor, len);
                 self.advance(len);
@@ -168,9 +168,9 @@ impl<'a> Cursor<'a> {
     ///
     /// If `byte` is not found, returns `None`, and cursor is not advanced.
     #[inline]
-    pub fn next_until(&mut self, byte: u8) -> Option<&'a [u8]> {
-        match self.find_inner(byte) {
-            // SAFETY: checked by `find_inner`
+    pub fn next_until<S: Strategy>(&mut self, strategy: S) -> Option<&'a [u8]> {
+        match self.find_inner(strategy) {
+            // SAFETY: checked by Strategy implementation
             Some(len) => unsafe {
                 let chunk = slice(self.cursor, len + 1);
                 self.advance(len + 1);
@@ -186,15 +186,24 @@ impl<'a> Cursor<'a> {
     ///
     /// If `byte` is not found, returns `None`, and cursor is not advanced.
     #[inline]
-    pub fn next_split(&mut self, byte: u8) -> Option<&'a [u8]> {
-        match self.find_inner(byte) {
-            // SAFETY: checked by `find_inner`
+    pub fn next_split<S: Strategy>(&mut self, strategy: S) -> Option<&'a [u8]> {
+        match self.find_inner(strategy) {
+            // SAFETY: checked by Strategy implementation
             Some(len) => unsafe {
                 let chunk = slice(self.cursor, len);
                 self.advance(len + 1);
                 Some(chunk)
             },
             None => None,
+        }
+    }
+
+    #[inline]
+    fn find_inner<S: Strategy>(&self, strategy: S) -> Option<usize> {
+        if self.remaining() < size_of::<usize>() {
+            S::find_iter(strategy, self.cursor, self)
+        } else {
+            S::find_swar(strategy, self)
         }
     }
 
@@ -208,7 +217,7 @@ impl<'a> Cursor<'a> {
     #[inline]
     pub unsafe fn advance(&mut self, n: usize) {
         debug_assert!(
-            safe_add(self.cursor, n) <= self.end as usize,
+            self.remaining() >= n,
             "`Cursor::advance` safety violated, advancing `n` is out of bounds"
         );
         // SAFETY: asserted
@@ -224,7 +233,8 @@ impl<'a> Cursor<'a> {
     #[inline]
     pub unsafe fn step_back(&mut self, n: usize) {
         debug_assert!(
-            (self.cursor as usize).checked_sub(n).unwrap() >= self.start as usize,
+            // SAFETY: invariant `self.start <= self.cursor`
+            unsafe { self.cursor.offset_from(self.start) } as usize >= n,
             "`Cursor::step_back` safety violated, stepping back `n` is out of bounds"
         );
         // SAFETY: asserted
@@ -240,7 +250,7 @@ impl<'a> Cursor<'a> {
     ///
     /// When peeking complete, use [`Cursor::apply`] or [`Cursor::apply_to`] to apply the forked
     /// state to the parent [`Cursor`].
-    #[inline(always)]
+    #[inline]
     pub fn fork(&self) -> Cursor<'a> {
         Cursor {
             start: self.start,
@@ -265,105 +275,285 @@ impl<'a> Cursor<'a> {
     pub fn apply_to(self, other: &mut Cursor<'a>) {
         *other = self;
     }
-
-    // ===== Internal =====
-
-    #[inline]
-    fn find_inner(&self, byte: u8) -> Option<usize> {
-        debug_invariant!(self);
-
-        if self.remaining() < 8 {
-            self.find_iter(self.cursor, byte)
-        } else {
-            self.find_swar(byte)
-        }
-    }
-
-    fn find_swar(&self, byte: u8) -> Option<usize> {
-        const CHUNK_SIZE: usize = size_of::<usize>();
-        const LSB: usize = usize::from_ne_bytes([1; CHUNK_SIZE]);
-        const MSB: usize = usize::from_ne_bytes([128; CHUNK_SIZE]);
-
-        let target = usize::from_ne_bytes([byte; CHUNK_SIZE]);
-        let end = self.end as usize;
-        let mut cursor = self.cursor;
-
-        while safe_add(cursor, CHUNK_SIZE) < end {
-            // SAFETY: by while condition,`cursor` is valid until CHUNK_SIZE bytes
-            let x = usize::from_ne_bytes(unsafe { *cursor.cast::<[u8; CHUNK_SIZE]>() });
-
-            // SWAR
-            // `x ^ target` all matching bytes will be 0x00
-            //
-            // `xor_x.wrapping_sub(LSB)` matching bytes will wrap to 0xFF
-            // `xor_x!` matching bytes will be 0xFF
-            //
-            // bitwise AND both, resulting:
-            // - matched byte to be 0xFF
-            // - non-matched to be 0x00
-            //
-            // bitwise AND with MSB, resulting only the most
-            // significant bit of the matched byte to be set
-            //
-            // if no match found, all bytes will be 0x00
-            //
-            // otherwise, `.trailing_zeros() / 8` returns
-            // the first byte index that is matched
-
-            let xor_x = x ^ target;
-            let found = xor_x.wrapping_sub(LSB) & !xor_x & MSB;
-
-            if found != 0 {
-                let pos = (found.trailing_zeros() / 8) as usize;
-
-                // SAFETY: `cursor >= self.cursor`,
-                // cursor only `add`-ed, and `self.cursor` is unchanged
-                let offset = unsafe { offset_from(cursor, self.cursor) };
-
-                // SAFETY: pointer will never exceed `isize::MAX` so `usize` would never overflow
-                return Some(unsafe { pos.unchecked_add(offset) });
-            }
-
-            // SAFETY: by while condition, `cursor` is valid until CHUNK_SIZE bytes
-            cursor = unsafe { cursor.add(CHUNK_SIZE) };
-        }
-
-        self.find_iter(cursor, byte)
-    }
-
-    fn find_iter(&self, mut cursor: *const u8, byte: u8) -> Option<usize> {
-        while cursor < self.end {
-            // SAFETY: by while condition, `cursor` still in valid memory
-            if unsafe { *cursor } == byte {
-                // SAFETY: `cursor >= self.cursor`,
-                // cursor only being `add`-ed, and `self.cursor` is unchanged
-                return Some(unsafe { offset_from(cursor, self.cursor) });
-            } else {
-                // SAFETY: Because allocated objects can never be larger than `isize::MAX` bytes,
-                // `cursor == self.end` is always safe
-                cursor = unsafe { cursor.add(1) };
-            }
-        }
-
-        None
-    }
 }
 
-/// # Safety
-///
-/// `end >= start`
-#[inline]
-unsafe fn offset_from(end: *const u8, start: *const u8) -> usize {
-    // SAFETY: guaranteed by caller that `end >= start`,
-    // and no need check from `usize::try_from`
-    unsafe { end.offset_from(start) as usize }
-}
+/// Byte finding strategy.
+pub trait Strategy: sealed::Sealed { }
 
-/// Safely add pointer by casting to usize.
-#[inline]
-fn safe_add(ptr: *const u8, add: usize) -> usize {
-    // SAFETY: pointer will never exceed `isize::MAX` so it would never overflow
-    unsafe { (ptr as usize).unchecked_add(add) }
+mod sealed {
+    use std::ops::RangeFull;
+    use super::*;
+
+    const CHUNK_SIZE: usize = size_of::<usize>();
+    const LSB: usize = usize::from_ne_bytes([1; CHUNK_SIZE]);
+    const MSB: usize = usize::from_ne_bytes([128; CHUNK_SIZE]);
+
+    pub trait Sealed: Sized {
+        fn find_iter(self, start: *const u8, cursor: &Cursor<'_>) -> Option<usize>;
+
+        fn find_swar(self, cursor: &Cursor<'_>) -> Option<usize>;
+    }
+
+    // ===== Single u8 =====
+
+    impl Strategy for u8 { }
+    impl Sealed for u8 {
+        fn find_iter(self, mut current: *const u8, cursor: &Cursor<'_>) -> Option<usize> {
+            while current < cursor.end {
+                // SAFETY: by while condition, `cursor` still in valid memory
+                if unsafe { *current } == self {
+                    // SAFETY: `cursor >= cursor.cursor`,
+                    // cursor only being `add`-ed, and `cursor.cursor` is unchanged
+                    return Some(unsafe { current.offset_from(cursor.cursor) as usize });
+                } else {
+                    // SAFETY: Because allocated objects can never be larger than `isize::MAX` bytes,
+                    // `cursor == cursor.end` is always safe
+                    current = unsafe { current.add(1) };
+                }
+            }
+
+            None
+        }
+
+        fn find_swar(self, cursor: &Cursor<'_>) -> Option<usize> {
+            let target = usize::from_ne_bytes([self; CHUNK_SIZE]);
+            let mut current = cursor.cursor;
+
+            // SAFETY: `current` is always checked when set that is `<= cursor.end`
+            while unsafe { cursor.end.offset_from(current) as usize } > CHUNK_SIZE {
+                // SAFETY: by while condition, `current` is valid until CHUNK_SIZE bytes
+                let x = usize::from_ne_bytes(unsafe { *current.cast() });
+
+                // SWAR
+                // `x ^ target` all matching bytes will be 0x00
+                //
+                // `xor_x.wrapping_sub(LSB)` matching bytes will wrap to 0xFF
+                // `xor_x!` matching bytes will be 0xFF
+                //
+                // bitwise AND both, resulting:
+                // - matched byte to be 0xFF
+                // - non-matched to be 0x00
+                //
+                // bitwise AND with MSB, resulting only the most
+                // significant bit of the matched byte to be set
+                //
+                // if no match found, all bytes will be 0x00
+                //
+                // otherwise, `.trailing_zeros() / 8` returns
+                // the first byte index that is matched
+
+                let xor_x = x ^ target;
+                let found = xor_x.wrapping_sub(LSB) & !xor_x & MSB;
+
+                if found != 0 {
+                    let pos = (found.trailing_zeros() / 8) as usize;
+
+                    // SAFETY: `current >= cursor.cursor`,
+                    // `current` only `add`-ed, and `cursor.cursor` is unchanged
+                    let offset = unsafe { current.offset_from(cursor.cursor) as usize };
+
+                    // SAFETY: pointer will never exceed `isize::MAX` so `usize` would never overflow
+                    return Some(unsafe { pos.unchecked_add(offset) });
+                }
+
+                // SAFETY: by while condition, `current` is valid until CHUNK_SIZE bytes
+                current = unsafe { current.add(CHUNK_SIZE) };
+            }
+
+            self.find_iter(current, cursor)
+        }
+    }
+
+    // ===== Double u8 =====
+
+    impl Strategy for (u8,u8) { }
+    impl Sealed for (u8,u8) {
+        fn find_iter(self, mut current: *const u8, cursor: &Cursor<'_>) -> Option<usize> {
+            while current < cursor.end {
+                // SAFETY: by while condition, `cursor` still in valid memory
+                let c = unsafe { *current };
+                if c == self.0 || c == self.1 {
+                    // SAFETY: `current >= cursor.cursor`,
+                    // current only being `add`-ed, and `cursor.cursor` is unchanged
+                    return Some(unsafe { current.offset_from(cursor.cursor) as usize });
+                } else {
+                    // SAFETY: Because allocated objects can never be larger than `isize::MAX` bytes,
+                    // `current == cursor.end` is always safe
+                    current = unsafe { current.add(1) };
+                }
+            }
+
+            None
+        }
+
+        fn find_swar(self, cursor: &Cursor<'_>) -> Option<usize> {
+            let t1 = usize::from_ne_bytes([self.0; CHUNK_SIZE]);
+            let t2 = usize::from_ne_bytes([self.1; CHUNK_SIZE]);
+
+            let mut current = cursor.cursor;
+
+            // SAFETY: `current` is always checked when set that is `<= cursor.end`
+            while unsafe { cursor.end.offset_from(current) as usize } > CHUNK_SIZE {
+                // SAFETY: by while condition, `current` is valid until CHUNK_SIZE bytes
+                let value = usize::from_ne_bytes(unsafe { *current.cast() });
+
+                // SWAR
+                // explanation in `u8` implementation of `Strategy`
+                //
+                // additionally, we OR to merge 2 result
+
+                let xor_1 = value ^ t1;
+                let f1 = xor_1.wrapping_sub(LSB) & !xor_1;
+
+                let xor_2 = value ^ t2;
+                let f2 = xor_2.wrapping_sub(LSB) & !xor_2;
+
+                let found = (f1 | f2) & MSB;
+
+                if found != 0 {
+                    let pos = (found.trailing_zeros() / 8) as usize;
+
+                    // SAFETY: `current >= cursor.cursor`,
+                    // `current` only `add`-ed, and `cursor.cursor` is unchanged
+                    let offset = unsafe { current.offset_from(cursor.cursor) as usize };
+
+                    // SAFETY: pointer will never exceed `isize::MAX` so `usize` would never overflow
+                    return Some(unsafe { pos.unchecked_add(offset) });
+                }
+
+                // SAFETY: by while condition, `current` is valid until CHUNK_SIZE bytes
+                current = unsafe { current.add(CHUNK_SIZE) };
+            }
+
+            self.find_iter(current, cursor)
+        }
+    }
+
+    // ===== Triple u8 =====
+
+    impl Strategy for (u8,u8,u8) { }
+    impl Sealed for (u8,u8,u8) {
+        fn find_iter(self, mut current: *const u8, cursor: &Cursor<'_>) -> Option<usize> {
+            while current < cursor.end {
+                // SAFETY: by while condition, `cursor` still in valid memory
+                let c = unsafe { *current };
+                if c == self.0 || c == self.1 || c == self.2 {
+                    // SAFETY: `current >= cursor.cursor`,
+                    // current only being `add`-ed, and `cursor.cursor` is unchanged
+                    return Some(unsafe { current.offset_from(cursor.cursor) as usize });
+                } else {
+                    // SAFETY: Because allocated objects can never be larger than `isize::MAX` bytes,
+                    // `current == cursor.end` is always safe
+                    current = unsafe { current.add(1) };
+                }
+            }
+
+            None
+        }
+
+        fn find_swar(self, cursor: &Cursor<'_>) -> Option<usize> {
+            let t1 = usize::from_ne_bytes([self.0; CHUNK_SIZE]);
+            let t2 = usize::from_ne_bytes([self.1; CHUNK_SIZE]);
+            let t3 = usize::from_ne_bytes([self.2; CHUNK_SIZE]);
+
+            let mut current = cursor.cursor;
+
+            // SAFETY: `current` is always checked when set that is `<= cursor.end`
+            while unsafe { cursor.end.offset_from(current) as usize } > CHUNK_SIZE {
+                // SAFETY: by while condition, `current` is valid until CHUNK_SIZE bytes
+                let value = usize::from_ne_bytes(unsafe { *current.cast() });
+
+                // SWAR
+                // explanation in `u8` implementation of `Strategy`
+                //
+                // additionally, we OR to merge 3 result
+
+                let xor_1 = value ^ t1;
+                let f1 = xor_1.wrapping_sub(LSB) & !xor_1;
+
+                let xor_2 = value ^ t2;
+                let f2 = xor_2.wrapping_sub(LSB) & !xor_2;
+
+                let xor_3 = value ^ t3;
+                let f3 = xor_3.wrapping_sub(LSB) & !xor_3;
+
+                let found = (f1 | f2 | f3) & MSB;
+
+                if found != 0 {
+                    let pos = (found.trailing_zeros() / 8) as usize;
+
+                    // SAFETY: `current >= cursor.cursor`,
+                    // `current` only `add`-ed, and `cursor.cursor` is unchanged
+                    let offset = unsafe { current.offset_from(cursor.cursor) as usize };
+
+                    // SAFETY: pointer will never exceed `isize::MAX` so `usize` would never overflow
+                    return Some(unsafe { pos.unchecked_add(offset) });
+                }
+
+                // SAFETY: by while condition, `current` is valid until CHUNK_SIZE bytes
+                current = unsafe { current.add(CHUNK_SIZE) };
+            }
+
+            self.find_iter(current, cursor)
+        }
+    }
+
+    // ===== Other =====
+
+    impl Strategy for (u8,) { }
+    impl Sealed for (u8,) {
+        #[inline]
+        fn find_iter(self, start: *const u8, cursor: &Cursor<'_>) -> Option<usize> {
+            self.0.find_iter(start, cursor)
+        }
+
+        #[inline]
+        fn find_swar(self, cursor: &Cursor<'_>) -> Option<usize> {
+            self.0.find_swar(cursor)
+        }
+    }
+
+    /// Force to use iteration approach, this is used when user sure that finding will be short.
+    impl Strategy for (u8, RangeFull) { }
+    impl Sealed for (u8, RangeFull) {
+        #[inline]
+        fn find_iter(self, start: *const u8, cursor: &Cursor<'_>) -> Option<usize> {
+            self.0.find_iter(start, cursor)
+        }
+
+        #[inline]
+        fn find_swar(self, cursor: &Cursor<'_>) -> Option<usize> {
+            self.0.find_iter(cursor.cursor, cursor)
+        }
+    }
+
+    /// Force to use iteration approach, this is used when user sure that finding will be short.
+    impl Strategy for (u8, u8, RangeFull) { }
+    impl Sealed for (u8, u8, RangeFull) {
+        #[inline]
+        fn find_iter(self, start: *const u8, cursor: &Cursor<'_>) -> Option<usize> {
+            (self.0, self.1).find_iter(start, cursor)
+        }
+
+        #[inline]
+        fn find_swar(self, cursor: &Cursor<'_>) -> Option<usize> {
+            (self.0, self.1).find_iter(cursor.cursor, cursor)
+        }
+    }
+
+    /// Force to use iteration approach, this is used when user sure that finding will be short.
+    impl Strategy for (u8, u8, u8, RangeFull) { }
+    impl Sealed for (u8, u8, u8, RangeFull) {
+        #[inline]
+        fn find_iter(self, start: *const u8, cursor: &Cursor<'_>) -> Option<usize> {
+            (self.0, self.1, self.2).find_iter(start, cursor)
+        }
+
+        #[inline]
+        fn find_swar(self, cursor: &Cursor<'_>) -> Option<usize> {
+            (self.0, self.1, self.2).find_iter(cursor.cursor, cursor)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -422,26 +612,42 @@ mod test {
 
     #[test]
     fn test_next_find() {
-        const BUF: [u8; 14] = *b"Content-Type: ";
+        const BUF: [u8; 23] = *b"Content-Type: text/html";
 
         let mut cursor = Cursor::new(&BUF);
         assert_eq!(cursor.next_find(b'-'), Some(&b"Content"[..]));
-        assert_eq!(cursor.as_bytes(), &b"-Type: "[..]);
-
-        let mut cursor = Cursor::new(&BUF);
-        assert_eq!(cursor.next_until(b'-'), Some(&b"Content-"[..]));
-        assert_eq!(cursor.as_bytes(), &b"Type: "[..]);
-
-        let mut cursor = Cursor::new(&BUF);
-        assert_eq!(cursor.next_split(b'-'), Some(&b"Content"[..]));
-        assert_eq!(cursor.as_bytes(), &b"Type: "[..]);
+        assert_eq!(cursor.as_bytes(), &b"-Type: text/html"[..]);
 
         let mut cursor = Cursor::new(&BUF);
         assert_eq!(cursor.next_find(b':'), Some(&b"Content-Type"[..]));
-        assert_eq!(cursor.as_bytes(), &b": "[..]);
+        assert_eq!(cursor.as_bytes(), &b": text/html"[..]);
 
         let mut cursor = Cursor::new(&BUF);
         assert_eq!(cursor.next_find(b'*'), None);
         assert_eq!(cursor.as_bytes(), &BUF);
+
+        let mut cursor = Cursor::new(&BUF);
+        assert_eq!(cursor.next_find((b'-', b'T')), Some(&b"Content"[..]));
+        assert_eq!(cursor.as_bytes(), &b"-Type: text/html"[..]);
+
+        let mut cursor = Cursor::new(&BUF);
+        assert_eq!(cursor.next_find((b'T', b'-')), Some(&b"Content"[..]));
+        assert_eq!(cursor.as_bytes(), &b"-Type: text/html"[..]);
+
+        let mut cursor = Cursor::new(&BUF);
+        assert_eq!(cursor.next_find((b'T', b'-', ..)), Some(&b"Content"[..]));
+        assert_eq!(cursor.as_bytes(), &b"-Type: text/html"[..]);
+
+        // until
+
+        let mut cursor = Cursor::new(&BUF);
+        assert_eq!(cursor.next_until(b'-'), Some(&b"Content-"[..]));
+        assert_eq!(cursor.as_bytes(), &b"Type: text/html"[..]);
+
+        // split
+
+        let mut cursor = Cursor::new(&BUF);
+        assert_eq!(cursor.next_split(b'-'), Some(&b"Content"[..]));
+        assert_eq!(cursor.as_bytes(), &b"Type: text/html"[..]);
     }
 }
