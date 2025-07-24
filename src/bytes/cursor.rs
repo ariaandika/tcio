@@ -41,6 +41,8 @@ impl<'a> Cursor<'a> {
         }
     }
 
+    // ===== Reference =====
+
     /// Returns how many [`Cursor`] has stepped forward.
     #[inline]
     pub fn steps(&self) -> usize {
@@ -75,7 +77,7 @@ impl<'a> Cursor<'a> {
         unsafe { slice(self.cursor, offset_from(self.end, self.cursor)) }
     }
 
-    // ===== Operations =====
+    // ===== Peek =====
 
     /// Try get the first byte without advancing cursor.
     #[inline]
@@ -99,6 +101,8 @@ impl<'a> Cursor<'a> {
             None
         }
     }
+
+    // ===== Next =====
 
     /// Try get the first byte and advance the cursor by `1`.
     #[inline]
@@ -137,6 +141,8 @@ impl<'a> Cursor<'a> {
             None
         }
     }
+
+    // ===== Find SIMD =====
 
     /// Returns chunk until the first found `byte`, and advance cursor to `byte`.
     ///
@@ -191,6 +197,8 @@ impl<'a> Cursor<'a> {
             None => None,
         }
     }
+
+    // ===== Advance / Step Back =====
 
     /// Advance cursor, discarding the first `n`-th bytes.
     ///
@@ -317,8 +325,9 @@ impl<'a> Cursor<'a> {
 /// `end >= start`
 #[inline]
 unsafe fn offset_from(end: *const u8, start: *const u8) -> usize {
-    // SAFETY: guaranteed by caller that `end >= start`
-    unsafe { usize::try_from(end.offset_from(start)).unwrap_unchecked() }
+    // SAFETY: guaranteed by caller that `end >= start`,
+    // and no need check from `usize::try_from`
+    unsafe { end.offset_from(start) as usize }
 }
 
 /// Safely add pointer by casting to usize.
