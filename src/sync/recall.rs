@@ -26,7 +26,7 @@ use std::{
 ///  # impl Server { fn new() -> Self { Self } }
 ///  # impl Iterator for Server {
 ///  #     type Item = Client;
-///  #     fn next(&mut self) -> Option<Self::Item> { todo!() }
+///  #     fn next(&mut self) -> Option<Self::Item> { unimplemented!() }
 ///  # }
 ///  # struct Client;
 ///  # impl Client {
