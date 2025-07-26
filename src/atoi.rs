@@ -2,6 +2,9 @@ const U64_MAX_BUF: &[u8; 20] = b"18446744073709551615";
 const U64_MAX_CH: usize = U64_MAX_BUF.len();
 const U64_MAX_B_PTR: *const u8 = U64_MAX_BUF.as_ptr();
 
+const U_MAX_MOCK: &[u8; U64_MAX_CH] = b"99999999999999999999";
+const U_MAX_PTR: *const u8 = U_MAX_MOCK.as_ptr();
+
 /// Parse ascii to unsigned integer.
 pub const fn atou(text: &[u8]) -> Option<u64> {
     if text.len() > U64_MAX_CH || text.is_empty() {
@@ -9,18 +12,19 @@ pub const fn atou(text: &[u8]) -> Option<u64> {
     }
 
     let ptr = text.as_ptr();
-    let max = text.len();
-    let is_max = max == U64_MAX_CH;
+    let len = text.len();
+    let max_ptr = if len == U64_MAX_CH { U64_MAX_B_PTR } else { U_MAX_PTR };
+
     let mut o = 0u64;
     let mut i = 0;
 
-    while i < max {
+    while i < len {
         unsafe {
             // SAFETY: i < text.len()
             let n = *ptr.add(i);
 
-            //                              SAFETY: i < U64_MAX_CH
-            if n < b'0' || n > (if is_max { *U64_MAX_B_PTR.add(i) } else { b'9' }) {
+            // SAFETY: i < U64_MAX_CH
+            if n < b'0' || n > *max_ptr.add(i) {
                 return None;
             }
 
@@ -28,7 +32,7 @@ pub const fn atou(text: &[u8]) -> Option<u64> {
             // thus it cannot overflow
             o = o
                 .unchecked_mul(10)
-                .unchecked_add(u8::unchecked_sub(n, 48) as u64);
+                .unchecked_add(u8::unchecked_sub(n, b'0') as u64);
 
             // SAFETY: i < text.len()
             i = i.unchecked_add(1);
@@ -70,18 +74,19 @@ pub const fn atoi(text: &[u8]) -> Option<i64> {
     }
 
     let ptr = text.as_ptr();
-    let max = text.len();
-    let is_max = max == I64_MAX_CH;
+    let len = text.len();
+    let max_ptr = if len == I64_MAX_CH { I64_MAX_B_PTR } else { U_MAX_PTR };
+
     let mut o = 0i64;
     let mut i = 0;
 
-    while i < max {
+    while i < len {
         unsafe {
             // SAFETY: i < text.len()
             let n = *ptr.add(i);
 
-            //                              SAFETY: i < I64_MAX_CH
-            if n < b'0' || n > (if is_max { *I64_MAX_B_PTR.add(i) } else { b'9' }) {
+            // SAFETY: i < I64_MAX_CH
+            if n < b'0' || n > *max_ptr.add(i) {
                 return None;
             }
 
