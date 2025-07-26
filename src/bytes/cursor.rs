@@ -328,7 +328,7 @@ mod sealed {
                 // `x ^ target` all matching bytes will be 0x00
                 //
                 // `xor_x.wrapping_sub(LSB)` matching bytes will wrap to 0xFF
-                // `xor_x!` matching bytes will be 0xFF
+                // `!xor_x` matching bytes will be 0xFF
                 //
                 // bitwise AND both, resulting:
                 // - matched byte to be 0xFF

@@ -1,4 +1,24 @@
-//! # Utilities
+//! # TcIO.
+//!
+//! An APIs so small that it can be merged together.
+//!
+//! - [`ByteStr`], a [`Bytes`] that contains a valid UTF-8
+//! - [`Either`], represent 2 types that have the same behavior
+//! - [`atoi`], parse bytes directly to signed/unsigned integer
+//! - [`Cursor`], iterate over bytes without bounds checking
+//! - [`Future`] adapters
+//!
+//! This crate also contains shared async types, such:
+//!
+//! - [`AsyncIoRead`] and [`AsyncIoWrite`]
+//!
+//! Other types are exploration that may or may not be persist in future version.
+//!
+//! [`Bytes`]: ::bytes::Bytes
+//! [`atoi`]: atoi::atoi
+//! [`Cursor`]: bytes::Cursor
+//! [`AsyncIoRead`]: io::AsyncIoRead
+//! [`AsyncIoWrite`]: io::AsyncIoWrite
 #![warn(missing_docs, missing_debug_implementations)]
 
 mod bytestr;
