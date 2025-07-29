@@ -72,6 +72,13 @@ impl<'a> Cursor<'a> {
 
     /// Returns the remaining bytes.
     #[inline]
+    pub fn as_slice(&self) -> &'a [u8] {
+        // SAFETY: invariant `self.cursor <= self.end`
+        unsafe { slice(self.cursor, self.remaining()) }
+    }
+
+    /// Returns the remaining bytes.
+    #[inline]
     pub fn as_bytes(&self) -> &'a [u8] {
         // SAFETY: invariant `self.cursor <= self.end`
         unsafe { slice(self.cursor, self.remaining()) }
