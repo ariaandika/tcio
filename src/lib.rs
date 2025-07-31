@@ -21,6 +21,7 @@
 //! [`AsyncIoWrite`]: io::AsyncIoWrite
 #![warn(missing_docs, missing_debug_implementations)]
 
+mod macros;
 mod bytestr;
 mod either;
 mod either_map;

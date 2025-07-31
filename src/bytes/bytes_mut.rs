@@ -561,3 +561,26 @@ impl std::fmt::Debug for BytesMut {
         crate::fmt::lossy(&self.as_slice()).fmt(f)
     }
 }
+
+crate::macros::deref! {
+    |&self: BytesMut| -> [u8] { self.as_slice() }
+    |&mut self: BytesMut| -> [u8] { self.as_mut_slice() }
+}
+
+crate::macros::partial_eq! {
+    |&self: BytesMut, other: [u8]| { self.as_slice() == other }
+    |&self: BytesMut, other: &[u8]| { self.as_slice() == *other }
+    |&self: BytesMut, other: str| { self.as_slice() == other.as_bytes() }
+    |&self: BytesMut, other: &str| { self.as_slice() == other.as_bytes() }
+    |&self: BytesMut, other: Vec<u8>| { self.as_slice() == other.as_slice() }
+    |&self: BytesMut, other: String| { self.as_slice() == other.as_bytes() }
+    |&self: BytesMut, other: Bytes| { self.as_slice() == other.as_slice() }
+    |&self: BytesMut, other: BytesMut| { self.as_slice() == other.as_slice() }
+}
+
+crate::macros::from! {
+    <'a>|value: &'a [u8]| -> BytesMut { BytesMut::from_vec(value.to_vec()) }
+    <'a>|value: &'a str| -> BytesMut { BytesMut::from_vec(value.as_bytes().to_vec()) }
+    |value: Vec<u8>| -> BytesMut { BytesMut::from_vec(value) }
+    |value: BytesMut| -> Bytes { value.freeze() }
+}

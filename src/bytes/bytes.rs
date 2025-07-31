@@ -307,15 +307,6 @@ impl Clone for Bytes {
     }
 }
 
-impl std::ops::Deref for Bytes {
-    type Target = [u8];
-
-    #[inline]
-    fn deref(&self) -> &[u8] {
-        self.as_slice()
-    }
-}
-
 impl Default for Bytes {
     fn default() -> Self {
         Self::new()
@@ -326,6 +317,29 @@ impl std::fmt::Debug for Bytes {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         crate::fmt::lossy(&self.as_slice()).fmt(f)
     }
+}
+
+crate::macros::deref! {
+    |&self: Bytes| -> [u8] { self.as_slice() }
+}
+
+crate::macros::partial_eq! {
+    |&self: Bytes, other: [u8]| { self.as_slice() == other }
+    |&self: Bytes, other: &[u8]| { self.as_slice() == *other }
+    |&self: Bytes, other: str| { self.as_slice() == other.as_bytes() }
+    |&self: Bytes, other: &str| { self.as_slice() == other.as_bytes() }
+    |&self: Bytes, other: Vec<u8>| { self.as_slice() == other.as_slice() }
+    |&self: Bytes, other: String| { self.as_slice() == other.as_bytes() }
+    |&self: Bytes, other: Bytes| { self.as_slice() == other.as_slice() }
+    |&self: Bytes, other: BytesMut| { self.as_slice() == other.as_slice() }
+}
+
+crate::macros::from! {
+    |value: &'static [u8]| -> Bytes { Bytes::from_static(value) }
+    |value: &'static str| -> Bytes { Bytes::from_static(value.as_bytes()) }
+    // |value: Box<[u8]>| -> Bytes { todo!() }
+    |value: Vec<u8>| -> Bytes { Bytes::from_vec(value) }
+    |value: String| -> Bytes { Bytes::from_vec(value.into_bytes()) }
 }
 
 // ===== Vtable =====
