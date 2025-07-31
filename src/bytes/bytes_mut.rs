@@ -6,7 +6,7 @@ use std::{
     slice,
 };
 
-use super::{Data, DataMut, Shared};
+use super::{Data, DataMut, Shared, Bytes};
 
 // BytesMut is a unique `&mut [u8]` over a shared heap allocated `[u8]`
 //
@@ -109,7 +109,7 @@ impl BytesMut {
         BytesMut::from_vec(Vec::with_capacity(capacity))
     }
 
-    const fn from_vec(mut vec: Vec<u8>) -> BytesMut {
+    pub(crate) const fn from_vec(mut vec: Vec<u8>) -> BytesMut {
         let len = vec.len();
         let cap = vec.capacity();
         let ptr = unsafe { NonNull::new_unchecked(vec.as_mut_ptr()) };
@@ -139,6 +139,14 @@ impl BytesMut {
     #[inline]
     pub const fn capacity(&self) -> usize {
         self.cap
+    }
+
+    /// Shortens the buffer, keeping the first `len` bytes and dropping the rest.
+    #[inline]
+    pub fn truncate(&mut self, len: usize) {
+        if len < self.len {
+            self.len = len;
+        }
     }
 
     /// Clears the `BytesMut`, removing all bytes.
@@ -178,6 +186,22 @@ impl BytesMut {
             let ptr = self.ptr.as_ptr().add(self.len).cast();
             let remaining = self.cap - self.len;
             slice::from_raw_parts_mut(ptr, remaining)
+        }
+    }
+
+    /// Converts `self` into an immutable `Bytes`.
+    #[inline]
+    pub fn freeze(self) -> Bytes {
+        let me = ManuallyDrop::new(self);
+
+        match me.data() {
+            Data::Owned { data: offset } => unsafe {
+                let vec = me.original_buffer();
+                let mut bytes = Bytes::from_vec(vec);
+                bytes.advance(offset);
+                bytes
+            },
+            Data::Shared(_) => Bytes::from_shared(me.ptr.as_ptr(), me.len, me.data),
         }
     }
 
@@ -441,7 +465,7 @@ impl BytesMut {
     /// # Safety
     ///
     /// `count <= self.cap`
-    unsafe fn advance_unchecked(&mut self, count: usize) {
+    pub(crate) unsafe fn advance_unchecked(&mut self, count: usize) {
         if count == 0 {
             return;
         }
@@ -537,4 +561,3 @@ impl std::fmt::Debug for BytesMut {
         crate::fmt::lossy(&self.as_slice()).fmt(f)
     }
 }
-

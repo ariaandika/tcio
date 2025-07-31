@@ -167,5 +167,23 @@ impl Shared {
             drop(Vec::from_raw_parts(me.ptr.as_ptr(), me.len, me.cap));
         }
     }
+
+    /// Release the `Shared` handle, if the reference is unique, returns the underlying buffer.
+    pub fn release_into_inner(ptr: *mut Shared) -> Option<Vec<u8>> {
+        use std::sync::atomic::Ordering;
+
+        // .compare_exchange(1, 0, Ordering::AcqRel, Ordering::Relaxed)
+
+        if unsafe { (*ptr).count.fetch_sub(1, Ordering::Release) } != 1 {
+            return None;
+        }
+
+        unsafe { (*ptr).count.load(Ordering::Acquire) };
+
+        unsafe {
+            let me = Box::from_raw(ptr);
+            Some(Vec::from_raw_parts(me.ptr.as_ptr(), me.len, me.cap))
+        }
+    }
 }
 
