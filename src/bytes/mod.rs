@@ -1,7 +1,11 @@
 //! Raw bytes utilities.
+mod shared;
+
 mod bytes_mut;
 mod cursor;
 mod range;
+
+use shared::{Shared, Data, DataMut};
 
 pub use bytes_mut::BytesMut;
 pub use cursor::Cursor;

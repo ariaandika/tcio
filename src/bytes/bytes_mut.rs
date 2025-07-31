@@ -4,18 +4,9 @@ use std::{
     mem::{ManuallyDrop, MaybeUninit},
     ptr::{self, NonNull},
     slice,
-    sync::atomic::AtomicUsize,
 };
 
-
-// `Shared` have even number alignment, so the LSB is always unset
-const _: [(); align_of::<Shared>() % 2] = [];
-
-// const DATA_SHARED: usize = 0b0;
-const DATA_OWNED: usize = 0b1;
-const DATA_MASK: usize = 0b1;
-
-const RESERVED_BIT_DATA: usize = 1;
+use super::{Data, DataMut, Shared};
 
 // BytesMut is a unique `&mut [u8]` over a shared heap allocated `[u8]`
 //
@@ -98,89 +89,6 @@ pub struct BytesMut {
 unsafe impl Send for BytesMut { }
 unsafe impl Sync for BytesMut { }
 
-struct Shared {
-    count: AtomicUsize,
-    vec: Vec<u8>,
-}
-
-// `data` field representation
-enum Data<'a> {
-    Owned { offset: usize },
-    Shared(&'a Shared)
-}
-
-// `data` field mutable representation
-enum DataMut<'a> {
-    Owned { offset: usize },
-    Shared(&'a mut Shared)
-}
-
-impl Shared {
-    fn is_unique(&self) -> bool {
-        use std::sync::atomic::Ordering;
-        // The `Acquire` ordering synchronizes with the `Release` as
-        // part of the `fetch_sub` in `Shared::release`. The `fetch_sub`
-        // operation guarantees that any mutations done in other threads
-        // are ordered before the `ref_count` is decremented. As such,
-        // this `Acquire` will guarantee that those mutations are
-        // visible to the current thread.
-        self.count.load(Ordering::Acquire) == 1
-    }
-
-    // follow the clone procedure from `Arc`
-    fn increment(ptr: *mut Shared) {
-        use std::sync::atomic::Ordering;
-        // Using a relaxed ordering is alright here, as knowledge of the
-        // original reference prevents other threads from erroneously deleting
-        // the object.
-        //
-        // As explained in the [Boost documentation][1], Increasing the
-        // reference counter can always be done with memory_order_relaxed: New
-        // references to an object can only be formed from an existing
-        // reference, and passing an existing reference from one thread to
-        // another must already provide any required synchronization.
-        //
-        // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
-        let old_size = unsafe { &*ptr }.count.fetch_add(1, Ordering::Relaxed);
-
-        if old_size > isize::MAX as usize {
-            std::process::abort();
-        }
-    }
-
-    // follow the drop procedure from `Arc`
-    fn release(ptr: *mut Shared) {
-        use std::sync::atomic::Ordering;
-
-        if unsafe { &*ptr }.count.fetch_sub(1, Ordering::Release) != 1 {
-            return;
-        }
-
-        // This fence is needed to prevent reordering of use of the data and
-        // deletion of the data.  Because it is marked `Release`, the decreasing
-        // of the reference count synchronizes with this `Acquire` fence. This
-        // means that use of the data happens before decreasing the reference
-        // count, which happens before this fence, which happens before the
-        // deletion of the data.
-        //
-        // As explained in the [Boost documentation][1],
-        //
-        // > It is important to enforce any possible access to the object in one
-        // > thread (through an existing reference) to *happen before* deleting
-        // > the object in a different thread. This is achieved by a "release"
-        // > operation after dropping a reference (any access to the object
-        // > through this reference must obviously happened before), and an
-        // > "acquire" operation before deleting the object.
-        //
-        // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
-
-        // ThreadSanitizer does not support memory fences.
-        unsafe { &*ptr }.count.load(Ordering::Acquire);
-
-        drop(unsafe { Box::from_raw(ptr) });
-    }
-}
-
 impl BytesMut {
     /// Create new empty [`BytesMut`].
     ///
@@ -188,6 +96,11 @@ impl BytesMut {
     #[inline]
     pub const fn new() -> Self {
         BytesMut::from_vec(Vec::new())
+    }
+
+    #[inline]
+    pub fn copy_from_slice(slice: &[u8]) -> BytesMut {
+        BytesMut::from_vec(slice.to_vec())
     }
 
     /// Create new empty [`BytesMut`] with at least specified capacity.
@@ -206,7 +119,7 @@ impl BytesMut {
             ptr,
             len,
             cap,
-            data: DATA_OWNED as _,
+            data: Shared::data_owned(),
         }
     }
 
@@ -242,7 +155,7 @@ impl BytesMut {
 
     /// Returns the bytes as a mutable slice.
     #[inline]
-    pub fn as_slice_mut(&mut self) -> &mut [u8] {
+    pub const fn as_mut_slice(&mut self) -> &mut [u8] {
         unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
     }
 
@@ -272,47 +185,18 @@ impl BytesMut {
     // inner
 
     fn data(&self) -> Data<'_> {
-        if self.is_owned() {
-            Data::Owned {
-                offset: self.data as usize >> RESERVED_BIT_DATA,
-            }
-        } else {
-            Data::Shared(unsafe { &*self.data })
-        }
+        Shared::data(self.data)
     }
 
     fn data_mut(&mut self) -> DataMut<'_> {
-        if self.is_owned() {
-            DataMut::Owned {
-                offset: self.data as usize >> RESERVED_BIT_DATA,
-            }
-        } else {
-            DataMut::Shared(unsafe { &mut *self.data })
-        }
+        Shared::data_mut(self.data)
     }
 
-    /// Returns `true` if the underlying vector is not yet been shared.
+    /// # Safety
     ///
-    /// This allows for safe full mutable operation of underlying buffer.
-    fn is_owned(&self) -> bool {
-        (self.data as usize & DATA_MASK) == DATA_OWNED
-    }
-
-    fn owned_offset(&self) -> usize {
-        debug_assert!(self.is_owned());
-
-        self.data as usize >> RESERVED_BIT_DATA
-    }
-
-    fn set_owned_offset(&mut self, pos: usize) {
-        debug_assert!(self.is_owned());
-        debug_assert!(pos <= isize::MAX as usize);
-
-        self.data = (pos << RESERVED_BIT_DATA | DATA_OWNED) as _;
-    }
-
-    unsafe fn owned_buffer(&self) -> Vec<u8> {
-        let offset = self.owned_offset();
+    /// ensure `self.data` does not have other ownership
+    unsafe fn original_buffer(&self) -> Vec<u8> {
+        let offset = Shared::owned_data(self.data);
 
         unsafe {
             Vec::from_raw_parts(
@@ -348,13 +232,12 @@ impl BytesMut {
 
     #[inline]
     pub fn try_reclaim_full(&mut self) -> bool {
-        let remaining = self.cap - self.len;
         let additional = match self.data() {
-            Data::Owned { offset } => offset + remaining,
-            Data::Shared(shared) => shared.vec.capacity() - remaining,
+            Data::Owned { data: offset } => offset + (self.cap - self.len),
+            Data::Shared(shared) => shared.capacity() - self.len,
         };
 
-        self.try_reclaim(additional)
+        self.reserve_inner(additional, false)
     }
 
     /// Try to gain capacity without allocation
@@ -371,7 +254,7 @@ impl BytesMut {
         let len = self.len;
 
         match self.data_mut() {
-            DataMut::Owned { offset } => {
+            DataMut::Owned { data: offset } => {
                 let remaining = offset + (self.cap - self.len);
 
                 // Case 1, copy the data backwards
@@ -384,7 +267,9 @@ impl BytesMut {
 
                         self.ptr = NonNull::new_unchecked(start_ptr);
                         self.cap += offset;
-                        self.set_owned_offset(0);
+
+                        // reset the `offset`
+                        Shared::set_owned_data(&mut self.data, 0);
 
                         return true;
                     }
@@ -395,25 +280,30 @@ impl BytesMut {
                 }
 
                 unsafe {
+                    // follow `Vec::reserve` logic instead of `Vec::with_capacity`
                     let capacity = cmp::max(self.cap * 2, len + additional);
+
                     let mut new_vec = ManuallyDrop::new(Vec::with_capacity(capacity));
                     let new_ptr = new_vec.as_mut_ptr();
 
                     ptr::copy_nonoverlapping(ptr, new_ptr, len);
+                    new_vec.set_len(len);
 
                     // drop the original buffer *after* copy
-                    drop(self.owned_buffer());
+                    drop(self.original_buffer());
 
                     self.ptr = NonNull::new_unchecked(new_ptr);
                     self.cap = new_vec.capacity();
-                    self.set_owned_offset(0);
+
+                    // reset the `offset`
+                    Shared::set_owned_data(&mut self.data, 0);
 
                     true
                 }
             },
-            DataMut::Shared(shared) if shared.is_unique() => {
-                let shared_cap = shared.vec.capacity();
-                let shared_ptr = shared.vec.as_mut_ptr();
+            DataMut::Shared(shared) if shared.is_shared_unique() => {
+                let shared_cap = shared.capacity();
+                let shared_ptr = shared.as_mut_ptr();
                 let offset = unsafe { ptr.offset_from(shared_ptr) } as usize;
 
                 // reclaim the leftover tail capacity
@@ -447,34 +337,42 @@ impl BytesMut {
                 }
 
                 unsafe {
+                    // follow `Vec::reserve` logic instead of `Vec::with_capacity`
                     let capacity = cmp::max(self.cap * 2, len + additional);
+
                     let mut new_vec = ManuallyDrop::new(Vec::with_capacity(capacity));
                     let new_ptr = new_vec.as_mut_ptr();
 
                     ptr::copy_nonoverlapping(ptr, new_ptr, len);
+                    new_vec.set_len(len);
 
                     // release the shared buffer *after* copy
                     Shared::release(self.data);
 
                     self.ptr = NonNull::new_unchecked(new_ptr);
                     self.cap = new_vec.capacity();
+                    self.data = Shared::data_owned(); // switch back to `Owned` state
 
                     true
                 }
             },
             DataMut::Shared(_) if !allocate => false,
             DataMut::Shared(_) => unsafe {
+                // follow `Vec::reserve` logic instead of `Vec::with_capacity`
                 let capacity = cmp::max(self.cap * 2, len + additional);
+
                 let mut new_vec = ManuallyDrop::new(Vec::with_capacity(capacity));
                 let new_ptr = new_vec.as_mut_ptr();
 
                 ptr::copy_nonoverlapping(ptr, new_ptr, len);
+                new_vec.set_len(len);
 
                 // release the shared buffer *after* copy
                 Shared::release(self.data);
 
                 self.ptr = NonNull::new_unchecked(new_ptr);
                 self.cap = new_vec.capacity();
+                self.data = Shared::data_owned(); // switch back to `Owned` state
 
                 true
             }
@@ -483,114 +381,7 @@ impl BytesMut {
 }
 
 impl BytesMut {
-    // ===== Mutation =====
-
-    /// Copy and append bytes to the `BytesMut`.
-    #[inline]
-    pub fn extend_from_slice(&mut self, extend: &[u8]) {
-        let cnt = extend.len();
-        self.reserve(cnt);
-
-        unsafe {
-            let dst = self.spare_capacity_mut();
-
-            // reserved
-            debug_assert!(dst.len() >= cnt);
-
-            ptr::copy_nonoverlapping(extend.as_ptr(), dst.as_mut_ptr().cast(), cnt);
-
-            self.len = self.len.unchecked_add(cnt);
-        }
-    }
-
-    unsafe fn advance_unchecked(&mut self, count: usize) {
-        if count == 0 {
-            return;
-        }
-
-        debug_assert!(
-            count <= self.cap,
-            "BytesMut::advance_unchecked out of bounds"
-        );
-
-        if self.is_owned() {
-            self.set_owned_offset(self.owned_offset() + count);
-
-            debug_assert!(self.owned_offset() < isize::MAX as usize);
-        }
-
-        self.ptr = unsafe { self.ptr.add(count) };
-        self.len = self.len.saturating_sub(count);
-        self.cap -= count;
-    }
-
-    unsafe fn switch_to_shared(&mut self, count: usize) {
-        debug_assert!(self.is_owned());
-        debug_assert!(count == 1 || count == 2);
-
-        let shared = Box::new(Shared {
-            vec: unsafe { self.owned_buffer() },
-            count: AtomicUsize::new(count),
-        });
-        let shared = Box::into_raw(shared);
-
-        self.data = shared;
-
-        debug_assert!(!self.is_owned());
-    }
-
-    #[inline]
-    unsafe fn shallow_clone(&mut self) -> BytesMut {
-        unsafe {
-            if self.is_owned() {
-                Shared::increment(self.data);
-            } else {
-                self.switch_to_shared(2);
-            }
-            ptr::read(self)
-        }
-    }
-
-    #[inline]
-    pub fn split_to(&mut self, at: usize) -> BytesMut {
-        assert!(
-            at <= self.len(),
-            "BytesMut::split_to out of bounds: {:?} <= {:?}",
-            at,
-            self.len(),
-        );
-        unsafe {
-            let mut other = self.shallow_clone();
-            // `at <= self.len()`
-            self.advance_unchecked(at);
-            other.cap = at;
-            other.len = at;
-            other
-        }
-    }
-
-    #[inline]
-    pub fn split_off(&mut self, at: usize) -> BytesMut {
-        assert!(
-            at <= self.capacity(),
-            "BytesMut::split_off out of bounds: {:?} <= {:?}",
-            at,
-            self.capacity(),
-        );
-        unsafe {
-            let mut other = self.shallow_clone();
-            // `at <= self.capacity()`
-            other.advance_unchecked(at);
-            self.cap = at;
-            self.len = cmp::min(self.len, at);
-            other
-        }
-    }
-
-    #[inline]
-    pub fn split(&mut self) -> BytesMut {
-        self.split_to(self.len())
-    }
+    // ===== Read =====
 
     #[inline]
     pub fn advance(&mut self, cnt: usize) {
@@ -601,17 +392,128 @@ impl BytesMut {
             self.len,
         );
         unsafe {
-            // `cnt <= self.len`
+            // `cnt <= self.len`, and `self.len <= self.cap`
             self.advance_unchecked(cnt);
+        }
+    }
+
+    #[inline]
+    pub fn split(&mut self) -> BytesMut {
+        self.split_to(self.len)
+    }
+
+    #[inline]
+    pub fn split_to(&mut self, at: usize) -> BytesMut {
+        assert!(
+            at <= self.len,
+            "BytesMut::split_to out of bounds: {:?} <= {:?}",
+            at,
+            self.len,
+        );
+        let mut clone = self.shallow_clone();
+        unsafe {
+            // `at <= self.len`, and `self.len <= self.cap`
+            self.advance_unchecked(at);
+        }
+        clone.cap = at;
+        clone.len = at;
+        clone
+    }
+
+    #[inline]
+    pub fn split_off(&mut self, at: usize) -> BytesMut {
+        assert!(
+            at <= self.cap,
+            "BytesMut::split_off out of bounds: {:?} <= {:?}",
+            at,
+            self.cap,
+        );
+        let mut other = self.shallow_clone();
+        unsafe {
+            // `at <= self.cap`
+            other.advance_unchecked(at);
+        }
+        self.cap = at;
+        self.len = cmp::min(self.len, at); // could advance pass `self.len`
+        other
+    }
+
+    /// # Safety
+    ///
+    /// `count <= self.cap`
+    unsafe fn advance_unchecked(&mut self, count: usize) {
+        if count == 0 {
+            return;
+        }
+
+        debug_assert!(
+            count <= self.cap,
+            "BytesMut::advance_unchecked out of bounds"
+        );
+
+        if let Data::Owned { data: offset } = Shared::data(self.data) {
+            Shared::set_owned_data(&mut self.data, offset + count);
+
+            debug_assert!(offset + count < isize::MAX as usize);
+        }
+
+        unsafe {
+            self.ptr = self.ptr.add(count); // fn precondition
+            self.len = self.len.saturating_sub(count); // could advance pass `self.len`
+            self.cap = self.cap.unchecked_sub(count); // fn precondition
+        }
+    }
+
+    fn shallow_clone(&mut self) -> BytesMut {
+        match self.data_mut() {
+            DataMut::Owned { .. } => {
+                // upgrade to `Shared` repr
+
+                // SAFETY: the ownership is transfered to `Shared`
+                let vec = unsafe { self.original_buffer() };
+
+                self.data = Box::into_raw(Box::new(Shared::from_vec(vec, 2)));
+
+                debug_assert!(Shared::is_repr_shared(self.data));
+            },
+            DataMut::Shared(shared) => {
+                shared.increment();
+            },
+        }
+        // ref count incremented
+        unsafe { ptr::read(self) }
+    }
+}
+
+impl BytesMut {
+    // ===== Write =====
+
+    /// Copy and append bytes to the `BytesMut`.
+    #[inline]
+    pub fn extend_from_slice(&mut self, extend: &[u8]) {
+        let additional = extend.len();
+        self.reserve(additional);
+
+        unsafe {
+            let dst = self.spare_capacity_mut();
+
+            debug_assert!(dst.len() >= additional);
+
+            ptr::copy_nonoverlapping(extend.as_ptr(), dst.as_mut_ptr().cast(), additional);
+
+            self.len += additional;
         }
     }
 }
 
 impl Drop for BytesMut {
     fn drop(&mut self) {
-        match self.data_mut() {
-            DataMut::Owned { .. } => drop(unsafe { self.owned_buffer() }),
-            DataMut::Shared(_) => Shared::release(self.data),
+        match self.data() {
+            Data::Owned { .. } => {
+                // SAFETY: to be drop
+                unsafe { drop(self.original_buffer()) }
+            },
+            Data::Shared(_) => Shared::release(self.data),
         }
     }
 }
@@ -619,7 +521,7 @@ impl Drop for BytesMut {
 impl Clone for BytesMut {
     #[inline]
     fn clone(&self) -> BytesMut {
-        BytesMut::from_vec(self.as_slice().to_vec())
+        BytesMut::copy_from_slice(self.as_slice())
     }
 }
 
