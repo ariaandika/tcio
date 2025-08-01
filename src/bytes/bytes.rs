@@ -46,6 +46,9 @@ impl Bytes {
             // return Bytes::from(vec.into_boxed_slice());
         }
 
+        // PERF: maybe we can start in `Owned` mode instead of immediately allocating.
+        // the problem is cloning can be done concurrently, which can cause concurent
+        // allocation, which should be taken care of
         let shared = Box::into_raw(Box::new(Shared::from_vec(vec, 1)));
 
         Bytes {

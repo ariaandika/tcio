@@ -67,34 +67,34 @@ impl ByteStr {
         Self { bytes: Bytes::from_static(string.as_bytes()) }
     }
 
-    /// Try to get mutable reference to underlying string.
-    ///
-    /// If `self` is not unique for the entire original buffer, callback not called and return `false`.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use tcio::ByteStr;
-    ///
-    /// let mut text = ByteStr::copy_from_str("Content-Type");
-    /// assert!(text.try_mut(|e|e.make_ascii_lowercase()));
-    /// assert_eq!(&text, "content-type");
-    /// ```
-    pub fn try_mut<F: FnOnce(&mut str)>(&mut self, f: F) -> bool {
-        match Bytes::try_into_mut(std::mem::take(&mut self.bytes)) {
-            Ok(mut original) => {
-                // SAFETY: invariant bytes is a valid utf8
-                let str_mut = unsafe { str::from_utf8_unchecked_mut(&mut original) };
-                f(str_mut);
-                self.bytes = original.freeze();
-                true
-            },
-            Err(original) => {
-                self.bytes = original;
-                false
-            },
-        }
-    }
+    // /// Try to get mutable reference to underlying string.
+    // ///
+    // /// If `self` is not unique for the entire original buffer, callback not called and return `false`.
+    // ///
+    // /// # Examples
+    // ///
+    // /// ```
+    // /// use tcio::ByteStr;
+    // ///
+    // /// let mut text = ByteStr::copy_from_str("Content-Type");
+    // /// assert!(text.try_mut(|e|e.make_ascii_lowercase()));
+    // /// assert_eq!(&text, "content-type");
+    // /// ```
+    // pub fn try_mut<F: FnOnce(&mut str)>(&mut self, f: F) -> bool {
+    //     match Bytes::try_into_mut(std::mem::take(&mut self.bytes)) {
+    //         Ok(mut original) => {
+    //             // SAFETY: invariant bytes is a valid utf8
+    //             let str_mut = unsafe { str::from_utf8_unchecked_mut(&mut original) };
+    //             f(str_mut);
+    //             self.bytes = original.freeze();
+    //             true
+    //         },
+    //         Err(original) => {
+    //             self.bytes = original;
+    //             false
+    //         },
+    //     }
+    // }
 
     /// Clears the string, removing all data.
     #[inline]

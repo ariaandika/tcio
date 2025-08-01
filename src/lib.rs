@@ -35,8 +35,6 @@ pub mod sync;
 
 #[cfg(feature = "tokio")]
 pub mod tokio;
-#[cfg(feature = "tokio")]
-pub mod io_task;
 
 // ===== Re-exports =====
 

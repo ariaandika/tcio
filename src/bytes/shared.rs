@@ -33,6 +33,7 @@ impl Shared {
         DATA_OWNED as _
     }
 
+    /// note that this implementation immediately set `Shared` in shared mode
     pub const fn from_vec(mut vec: Vec<u8>, count: usize) -> Self {
         let len = vec.len();
         let cap = vec.capacity();
