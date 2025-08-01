@@ -1,7 +1,6 @@
 //! Raw bytes utilities.
 mod shared;
 
-#[allow(clippy::module_inception)]
 mod bytes;
 mod bytes_mut;
 mod bytestr;

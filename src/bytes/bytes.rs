@@ -7,6 +7,7 @@ use std::{
 
 use super::BytesMut;
 
+/// A cheaply cloneable and sliceable chunk of contiguous memory.
 pub struct Bytes {
     ptr: *const u8,
     len: usize,
@@ -19,6 +20,7 @@ unsafe impl Send for Bytes {}
 unsafe impl Sync for Bytes {}
 
 impl Bytes {
+    /// Create new empty [`Bytes`].
     #[inline]
     pub const fn new() -> Self {
         Self::from_static(&[])
@@ -79,25 +81,107 @@ impl Bytes {
     //     }
     // }
 
+    /// Create new [`Bytes`] by copying given bytes.
     #[inline]
     pub fn copy_from_slice(data: &[u8]) -> Self {
         Self::from_vec(data.to_vec())
     }
 
+    /// Returns the number of bytes in the `Bytes`.
     #[inline]
     pub const fn len(&self) -> usize {
         self.len
     }
 
+    /// Returns `true` if `Bytes` contains no bytes.
     #[inline]
     pub const fn is_empty(&self) -> bool {
         self.len == 0
     }
 
+    /// Returns `true` if `Bytes` is the only handle in a shared buffer.
+    ///
+    /// `Bytes` constructed from [`Bytes::from_static`] will always returns `false`.
     #[inline]
     pub fn is_unique(&self) -> bool {
         unsafe { (self.vtable.is_unique)(&self.data) }
     }
+
+    #[inline]
+    pub fn advance(&mut self, cnt: usize) {
+        assert!(
+            cnt <= self.len(),
+            "cannot advance past `remaining`: {:?} <= {:?}",
+            cnt,
+            self.len(),
+        );
+
+        unsafe {
+            self.advance_unchecked(cnt);
+        }
+    }
+
+    #[inline]
+    pub fn truncate(&mut self, len: usize) {
+        if len < self.len {
+            self.len = len;
+        }
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.truncate(0);
+    }
+
+    #[inline]
+    pub const fn as_slice(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self.ptr, self.len) }
+    }
+
+    #[inline]
+    pub fn into_vec(self) -> Vec<u8> {
+        let me = ManuallyDrop::new(self);
+        unsafe { (me.vtable.into_vec)(&me.data, me.ptr, me.len) }
+    }
+
+    #[inline]
+    pub fn try_into_mut(self) -> Result<BytesMut, Self> {
+        if self.is_unique() {
+            let me = ManuallyDrop::new(self);
+            Ok(unsafe { (me.vtable.into_mut)(&me.data, me.ptr, me.len) })
+        } else {
+            Err(self)
+        }
+    }
+
+
+    // private
+
+    fn new_empty_with_ptr(ptr: *const u8) -> Self {
+        debug_assert!(!ptr.is_null());
+
+        // Detach this pointer's provenance from whichever allocation it came from, and reattach it
+        // to the provenance of the fake ZST [u8;0] at the same address.
+        let ptr = ptr::without_provenance(ptr as usize);
+
+        Bytes {
+            ptr,
+            len: 0,
+            data: AtomicPtr::new(ptr::null_mut()),
+            vtable: &STATIC_VTABLE,
+        }
+    }
+
+    #[inline]
+    const unsafe fn advance_unchecked(&mut self, count: usize) {
+        debug_assert!(count <= self.len, "Bytes::advance_unchecked out of bounds");
+        self.len -= count;
+        self.ptr = unsafe { self.ptr.add(count) };
+    }
+}
+
+impl Bytes {
+    // ===== Read =====
 
     pub fn slice(&self, range: impl std::ops::RangeBounds<usize>) -> Self {
         use core::ops::Bound;
@@ -219,78 +303,6 @@ impl Bytes {
         clone.len = at;
         clone
     }
-
-    #[inline]
-    pub fn advance(&mut self, cnt: usize) {
-        assert!(
-            cnt <= self.len(),
-            "cannot advance past `remaining`: {:?} <= {:?}",
-            cnt,
-            self.len(),
-        );
-
-        unsafe {
-            self.advance_unchecked(cnt);
-        }
-    }
-
-    #[inline]
-    pub fn truncate(&mut self, len: usize) {
-        if len < self.len {
-            self.len = len;
-        }
-    }
-
-    #[inline]
-    pub fn clear(&mut self) {
-        self.truncate(0);
-    }
-
-    #[inline]
-    pub const fn as_slice(&self) -> &[u8] {
-        unsafe { slice::from_raw_parts(self.ptr, self.len) }
-    }
-
-    #[inline]
-    pub fn into_vec(self) -> Vec<u8> {
-        let me = ManuallyDrop::new(self);
-        unsafe { (me.vtable.into_vec)(&me.data, me.ptr, me.len) }
-    }
-
-    #[inline]
-    pub fn try_into_mut(self) -> Result<BytesMut, Self> {
-        if self.is_unique() {
-            let me = ManuallyDrop::new(self);
-            Ok(unsafe { (me.vtable.into_mut)(&me.data, me.ptr, me.len) })
-        } else {
-            Err(self)
-        }
-    }
-
-
-    // private
-
-    fn new_empty_with_ptr(ptr: *const u8) -> Self {
-        debug_assert!(!ptr.is_null());
-
-        // Detach this pointer's provenance from whichever allocation it came from, and reattach it
-        // to the provenance of the fake ZST [u8;0] at the same address.
-        let ptr = ptr::without_provenance(ptr as usize);
-
-        Bytes {
-            ptr,
-            len: 0,
-            data: AtomicPtr::new(ptr::null_mut()),
-            vtable: &STATIC_VTABLE,
-        }
-    }
-
-    #[inline]
-    const unsafe fn advance_unchecked(&mut self, count: usize) {
-        debug_assert!(count <= self.len, "Bytes::advance_unchecked out of bounds");
-        self.len -= count;
-        self.ptr = unsafe { self.ptr.add(count) };
-    }
 }
 
 impl Drop for Bytes {
@@ -344,7 +356,7 @@ crate::macros::from! {
 
 // ===== Vtable =====
 
-pub(crate) struct Vtable {
+struct Vtable {
     /// fn(data, ptr, len)
     pub clone: unsafe fn(&AtomicPtr<()>, *const u8, usize) -> Bytes,
     /// fn(data, ptr, len)

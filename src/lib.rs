@@ -20,6 +20,7 @@
 //! [`AsyncIoRead`]: io::AsyncIoRead
 //! [`AsyncIoWrite`]: io::AsyncIoWrite
 #![warn(missing_docs, missing_debug_implementations)]
+#![allow(clippy::module_inception)]
 
 mod macros;
 mod either;

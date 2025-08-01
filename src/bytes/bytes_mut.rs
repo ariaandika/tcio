@@ -1,4 +1,3 @@
-#![allow(missing_docs, reason = "wip")]
 use std::{
     cmp,
     mem::{ManuallyDrop, MaybeUninit},
@@ -79,6 +78,7 @@ use super::{Data, DataMut, Shared, Bytes};
 //
 // in this case, it combine the logic from case 1 and 2
 
+/// A unique reference to a contiguous slice of memory.
 pub struct BytesMut {
     ptr: NonNull<u8>,
     len: usize,
@@ -98,6 +98,7 @@ impl BytesMut {
         BytesMut::from_vec(Vec::new())
     }
 
+    /// Create new [`BytesMut`] by copying given bytes.
     #[inline]
     pub fn copy_from_slice(slice: &[u8]) -> BytesMut {
         BytesMut::from_vec(slice.to_vec())
@@ -245,6 +246,7 @@ impl BytesMut {
         let _ = self.reserve_inner(additional, true);
     }
 
+    /// Try to reclaim additional capacity without allocating.
     #[inline]
     pub fn try_reclaim(&mut self, additional: usize) -> bool {
         if self.cap - self.len >= additional {
@@ -254,6 +256,7 @@ impl BytesMut {
         self.reserve_inner(additional, false)
     }
 
+    /// Try to reclaim all leftover capacity without allocating.
     #[inline]
     pub fn try_reclaim_full(&mut self) -> bool {
         let additional = match self.data() {
@@ -407,6 +410,7 @@ impl BytesMut {
 impl BytesMut {
     // ===== Read =====
 
+    /// Advance `BytesMut` forward.
     #[inline]
     pub fn advance(&mut self, cnt: usize) {
         assert!(
@@ -421,11 +425,23 @@ impl BytesMut {
         }
     }
 
+    /// Removes the bytes from the current view, returning them in a new `BytesMut` handle.
+    ///
+    /// Afterwards, `self` will be empty, but will retain any additional capacity that it had before
+    /// the operation. This is identical to `self.split_to(self.len())`.
+    ///
+    /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
     #[inline]
     pub fn split(&mut self) -> BytesMut {
         self.split_to(self.len)
     }
 
+    /// Splits the buffer into two at the given index.
+    ///
+    /// Afterwards `self` contains elements `[at, len)`, and the returned `BytesMut` contains
+    /// elements `[0, at)`.
+    ///
+    /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
     #[inline]
     pub fn split_to(&mut self, at: usize) -> BytesMut {
         assert!(
@@ -444,6 +460,12 @@ impl BytesMut {
         clone
     }
 
+    /// Splits the buffer into two at the given index.
+    ///
+    /// Afterwards `self` contains elements `[0, at)`, and the returned `BytesMut` contains
+    /// elements `[at, capacity)`.
+    ///
+    /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
     #[inline]
     pub fn split_off(&mut self, at: usize) -> BytesMut {
         assert!(
