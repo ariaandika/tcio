@@ -1,11 +1,18 @@
 
+/// Represent a readable in memory buffer.
 pub trait Buf {
+    /// Returns the total remaining bytes length.
     fn remaining(&self) -> usize;
 
+    /// Returns the contained bytes.
+    ///
+    /// The returned chunk can be less than [`remaining()`][Buf::remaining].
     fn chunk(&self) -> &[u8];
 
+    /// Advance buffer forward, discarding the first `cnt` bytes.
     fn advance(&mut self, cnt: usize);
 
+    /// Put chunk into [`IoSlice`][std::io::IoSlice].
     fn chunks_vectored<'a>(&'a self, dst: &mut [std::io::IoSlice<'a>]) -> usize {
         if dst.is_empty() {
             return 0;
@@ -19,10 +26,15 @@ pub trait Buf {
         }
     }
 
+    /// Returns `true` if there is no more bytes remaining.
     fn has_remaining(&self) -> bool {
         self.remaining() > 0
     }
 
+    /// Read chunk and copy it into [`Bytes`][super::Bytes].
+    ///
+    /// Specific implementation can optimize this by, for example, just increasing reference count,
+    /// preventing copy.
     fn copy_to_bytes(&mut self, len: usize) -> super::Bytes {
         if self.remaining() < len {
             panic!(

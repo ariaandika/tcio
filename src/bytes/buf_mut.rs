@@ -3,22 +3,29 @@ use core::{
     ptr,
 };
 
+/// Represent a writable in memory buffer.
 pub trait BufMut {
+    /// Returns the remaining capacity left this buffer can hold.
     fn remaining_mut(&self) -> usize;
 
+    /// Returns the unitialized bytes this buffer holds.
     fn chunk_mut(&mut self) -> &mut [MaybeUninit<u8>];
 
+    /// Advance the amount of initialized bytes.
+    ///
     /// # Safety
     ///
     /// The caller must ensure that the next `cnt` bytes of `chunk` are
     /// initialized.
     unsafe fn advance_mut(&mut self, cnt: usize);
 
+    /// Returns `true` if there is more capacity left remaining.
     #[inline]
     fn has_remaining_mut(&self) -> bool {
         self.remaining_mut() > 0
     }
 
+    /// Put a slice into buffer.
     #[inline]
     fn put_slice(&mut self, mut src: &[u8]) {
         if self.remaining_mut() < src.len() {
@@ -33,7 +40,7 @@ pub trait BufMut {
             let dst = self.chunk_mut();
             let cnt = usize::min(src.len(), dst.len());
 
-            // dst[..cnt].copy_from_slice(&src[..cnt]); TODO:
+            BufMut::put_slice(&mut &mut dst[..cnt], &src[..cnt]);
             src = &src[cnt..];
 
             // SAFETY: We just initialized `cnt` bytes in `self`.
@@ -67,6 +74,7 @@ impl BufMut for &mut [u8] {
         *self = b;
     }
 
+    #[inline]
     fn put_slice(&mut self, src: &[u8]) {
         if src.len() > self.len() {
             panic!(

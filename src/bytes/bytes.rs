@@ -25,6 +25,12 @@ impl Bytes {
         Self::from_static(&[])
     }
 
+    /// Create new [`Bytes`] from static slice.
+    ///
+    /// Since slice have static lifetime, cloning `Bytes` returned from this function is
+    /// effectively a noop.
+    ///
+    /// Additionally, [`is_unique`][Bytes::is_unique] will always returns `false`.
     #[inline]
     pub const fn from_static(bytes: &'static [u8]) -> Self {
         Self {
@@ -68,21 +74,6 @@ impl Bytes {
         }
     }
 
-    // #[inline]
-    // pub(crate) unsafe fn with_vtable(
-    //     ptr: *const u8,
-    //     len: usize,
-    //     data: AtomicPtr<()>,
-    //     vtable: &'static Vtable,
-    // ) -> Bytes {
-    //     Bytes {
-    //         ptr,
-    //         len,
-    //         data,
-    //         vtable,
-    //     }
-    // }
-
     /// Create new [`Bytes`] by copying given bytes.
     #[inline]
     pub fn copy_from_slice(data: &[u8]) -> Self {
@@ -109,6 +100,7 @@ impl Bytes {
         unsafe { (self.vtable.is_unique)(&self.data) }
     }
 
+    /// Shortens the buffer, keeping the first `len` bytes and dropping the rest.
     #[inline]
     pub fn truncate(&mut self, len: usize) {
         if len < self.len {
@@ -116,22 +108,26 @@ impl Bytes {
         }
     }
 
+    /// Clears the buffer, removing all values.
     #[inline]
     pub fn clear(&mut self) {
         self.truncate(0);
     }
 
+    /// Extracts a slice containing the entire bytes.
     #[inline]
     pub const fn as_slice(&self) -> &[u8] {
         unsafe { slice::from_raw_parts(self.ptr, self.len) }
     }
 
+    /// Converts a [`Bytes`] into a byte vector.
     #[inline]
     pub fn into_vec(self) -> Vec<u8> {
         let me = ManuallyDrop::new(self);
         unsafe { (me.vtable.into_vec)(&me.data, me.ptr, me.len) }
     }
 
+    /// Try to convert [`Bytes`] into [`BytesMut`] if its unique.
     #[inline]
     pub fn try_into_mut(self) -> Result<BytesMut, Self> {
         if self.is_unique() {

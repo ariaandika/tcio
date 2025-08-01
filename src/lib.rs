@@ -1,6 +1,6 @@
 //! # TcIO.
 //!
-//! An APIs so small that it can be merged together.
+//! Collection of utilities for working with async io and raw bytes.
 //!
 //! - [`ByteStr`], a [`Bytes`] that contains a valid UTF-8
 //! - [`Either`], represent 2 types that have the same behavior

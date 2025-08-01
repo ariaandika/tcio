@@ -1,4 +1,13 @@
-//! Raw bytes utilities.
+//! Utilities for working with bytes.
+//!
+//! Overview:
+//!
+//! - [`Buf`] represent a readable in memory buffer.
+//! - [`BufMut`] represent a writable in memory buffer.
+//! - [`Bytes`] is a reference counted shared memory buffer.
+//! - [`ByteStr`] is a `Bytes` that contains valid UTF-8.
+//! - [`BytesMut`] is a splitable in memory buffer.
+//! - [`Cursor`] track a position in a memory buffer.
 #![allow(missing_docs, reason = "wip")]
 mod shared;
 
