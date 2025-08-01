@@ -32,7 +32,7 @@ async fn sender() -> Result<(), io::Error> {
 }
 
 mod task {
-    use bytes::{Bytes, BytesMut};
+    use tcio::bytes::{Bytes, BytesMut};
     use std::{
         io,
         pin::Pin,
@@ -181,7 +181,7 @@ mod task {
                         }
                     }
                     Phase::Read => {
-                        let result = ready!(poll_read(&mut me.read_buf, &mut me.io, cx));
+                        let result = ready!(poll_read(me.read_buf, &mut me.io, cx));
                         match result {
                             Ok(read) => {
                                 let read = me.read_buf.split_to(read);

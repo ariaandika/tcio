@@ -14,7 +14,7 @@
 //!
 //! Other types are exploration that may or may not be persist in future version.
 //!
-//! [`Bytes`]: ::bytes::Bytes
+//! [`Bytes`]: bytes::Bytes
 //! [`atoi`]: atoi::atoi
 //! [`Cursor`]: bytes::Cursor
 //! [`AsyncIoRead`]: io::AsyncIoRead

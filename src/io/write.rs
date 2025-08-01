@@ -54,7 +54,7 @@ pub trait AsyncIoWrite {
     /// Returns [`Poll::Pending`] if the underlying stream not ready for writing.
     fn poll_write_buf<B>(&self, buf: &mut B, cx: &mut std::task::Context) -> Poll<io::Result<usize>>
     where
-        B: bytes::Buf + ?Sized,
+        B: crate::bytes::Buf + ?Sized,
     {
         self.poll_write(buf.chunk(), cx).map_ok(|read| {
             buf.advance(read);
@@ -71,7 +71,7 @@ pub trait AsyncIoWrite {
         cx: &mut std::task::Context,
     ) -> Poll<io::Result<()>>
     where
-        B: bytes::Buf + ?Sized,
+        B: crate::bytes::Buf + ?Sized,
     {
         const MAX_VECTOR_ELEMENTS: usize = 64;
 

@@ -1,4 +1,4 @@
-use bytes::{Bytes, BytesMut};
+use super::Bytes;
 
 /// A cheaply cloneable and sliceable str.
 ///
@@ -168,12 +168,13 @@ impl From<std::borrow::Cow<'static,str>> for ByteStr {
     }
 }
 
-impl From<Box<str>> for ByteStr {
-    #[inline]
-    fn from(value: Box<str>) -> Self {
-        Self { bytes: Bytes::from(value.into_boxed_bytes()) }
-    }
-}
+// TODO: wait for Bytes::from(Box<u8>)
+// impl From<Box<str>> for ByteStr {
+//     #[inline]
+//     fn from(value: Box<str>) -> Self {
+//         Self { bytes: Bytes::from(value.into_boxed_bytes()) }
+//     }
+// }
 
 impl From<String> for ByteStr {
     #[inline]
@@ -198,12 +199,13 @@ impl From<ByteStr> for Bytes {
     }
 }
 
-impl From<ByteStr> for BytesMut {
-    #[inline]
-    fn from(value: ByteStr) -> Self {
-        value.bytes.into()
-    }
-}
+// TODO: wait for Bytes::into_mut()
+// impl From<ByteStr> for BytesMut {
+//     #[inline]
+//     fn from(value: ByteStr) -> Self {
+//         value.bytes.into()
+//     }
+// }
 
 impl From<ByteStr> for String {
     #[inline]

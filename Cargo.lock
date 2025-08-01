@@ -126,7 +126,6 @@ dependencies = [
 name = "tcio"
 version = "0.1.4"
 dependencies = [
- "bytes",
  "tokio",
 ]
 

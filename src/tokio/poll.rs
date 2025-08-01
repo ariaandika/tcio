@@ -1,4 +1,4 @@
-use bytes::{Buf, BufMut};
+use crate::bytes::{Buf, BufMut};
 use std::{
     io::{self, IoSlice},
     pin::Pin,
@@ -22,7 +22,6 @@ where
 
     let n = {
         let dst = buf.chunk_mut();
-        let dst = unsafe { dst.as_uninit_slice_mut() };
         let mut buf = ReadBuf::uninit(dst);
         let ptr = buf.filled().as_ptr();
         ready!(Pin::new(io).poll_read(cx, &mut buf)?);

@@ -1,6 +1,6 @@
 use std::{io, task::Poll};
-use bytes::{Buf, BytesMut};
 
+use crate::bytes::{Buf, BytesMut};
 use crate::io::AsyncIoRead;
 
 /// An [`AsyncIoRead`] with internal buffer.

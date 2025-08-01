@@ -1,10 +1,10 @@
-use bytes::{Bytes, BytesMut};
 use std::{collections::VecDeque, io, mem::take, pin::Pin, task::Poll};
 use tokio::sync::{
     mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender},
     oneshot::{Receiver, Sender},
 };
 
+use crate::bytes::{Bytes, BytesMut};
 use crate::io::{AsyncIoRead, AsyncIoWrite};
 
 pub(crate) type TaskTx = UnboundedSender<TaskTxMessage>;

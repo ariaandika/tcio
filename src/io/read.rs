@@ -1,4 +1,4 @@
-use bytes::BufMut;
+use crate::bytes::BufMut;
 use std::{
     io,
     task::{Poll, ready},
@@ -21,10 +21,7 @@ where
     let read = {
         // SAFETY: we will only write initialized value and `MaybeUninit<T>` is guaranteed to
         // have the same size as `T`:
-        let dst = unsafe {
-            &mut *(buf.chunk_mut().as_uninit_slice_mut() as *mut [std::mem::MaybeUninit<u8>]
-                as *mut [u8])
-        };
+        let dst = unsafe { &mut *(buf.chunk_mut() as *mut _ as *mut [u8]) };
 
         tri!(ready!(poll(dst, cx)))
     };
@@ -87,8 +84,7 @@ pub trait AsyncIoRead {
             // SAFETY: we will only write initialized value and `MaybeUninit<T>` is guaranteed to
             // have the same size as `T`:
             let dst = unsafe {
-                &mut *(buf.chunk_mut().as_uninit_slice_mut() as *mut [std::mem::MaybeUninit<u8>]
-                    as *mut [u8])
+                &mut *(buf.chunk_mut() as *mut _ as *mut [u8])
             };
 
             tri!(ready!(self.poll_read(dst, cx)))

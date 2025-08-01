@@ -324,6 +324,10 @@ crate::macros::impl_std_traits! {
     fn eq(&self, &other: &Vec<u8>) { <[u8]>::eq(self, other.as_slice()) }
 }
 
+crate::macros::impl_std_traits! {
+    fn from(value: Bytes) -> Vec<u8> { value.into_vec() }
+}
+
 impl Buf for Bytes {
     #[inline]
     fn remaining(&self) -> usize {

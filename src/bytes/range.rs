@@ -1,4 +1,4 @@
-use bytes::{Bytes, BytesMut};
+use super::{Bytes, BytesMut};
 
 /// Returns the pointer range of a buffer.
 ///
@@ -169,7 +169,7 @@ pub fn slice_of_bytes_mut(range: std::ops::Range<usize>, bytes: &mut BytesMut) -
     );
 
     // `BytesMut::advance` have early returns if offset 0
-    bytes::Buf::advance(bytes, leading_len);
+    crate::bytes::Buf::advance(bytes, leading_len);
 
     bytes.split_to(sub_len)
 }

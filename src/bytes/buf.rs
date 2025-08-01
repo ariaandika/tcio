@@ -6,6 +6,19 @@ pub trait Buf {
 
     fn advance(&mut self, cnt: usize);
 
+    fn chunks_vectored<'a>(&'a self, dst: &mut [std::io::IoSlice<'a>]) -> usize {
+        if dst.is_empty() {
+            return 0;
+        }
+
+        if self.has_remaining() {
+            dst[0] = std::io::IoSlice::new(self.chunk());
+            1
+        } else {
+            0
+        }
+    }
+
     fn has_remaining(&self) -> bool {
         self.remaining() > 0
     }
