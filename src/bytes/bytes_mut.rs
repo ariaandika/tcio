@@ -602,3 +602,29 @@ impl Buf for BytesMut {
         self.split_to(len).freeze()
     }
 }
+
+impl super::BufMut for BytesMut {
+    #[inline]
+    fn remaining_mut(&self) -> usize {
+        isize::MAX as usize - self.len()
+    }
+
+    #[inline]
+    fn chunk_mut(&mut self) -> &mut [MaybeUninit<u8>] {
+        if self.capacity() == self.len() {
+            self.reserve(64);
+        }
+
+        self.spare_capacity_mut()
+    }
+
+    #[inline]
+    unsafe fn advance_mut(&mut self, cnt: usize) {
+        unsafe { self.set_len(self.len() + cnt) };
+    }
+
+    #[inline]
+    fn put_slice(&mut self, src: &[u8]) {
+        self.extend_from_slice(src);
+    }
+}
