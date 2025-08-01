@@ -552,7 +552,9 @@ impl BytesMut {
     }
 }
 
-impl Drop for BytesMut {
+crate::macros::impl_std_traits! {
+    impl BytesMut;
+
     fn drop(&mut self) {
         match self.data() {
             Data::Owned { .. } => {
@@ -562,47 +564,25 @@ impl Drop for BytesMut {
             Data::Shared(_) => Shared::release(self.data),
         }
     }
-}
 
-impl Clone for BytesMut {
-    #[inline]
-    fn clone(&self) -> BytesMut {
-        BytesMut::copy_from_slice(self.as_slice())
-    }
-}
-
-impl Default for BytesMut {
-    #[inline]
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl std::fmt::Debug for BytesMut {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    fn fmt(&self: BytesMut, f) {
         crate::fmt::lossy(&self.as_slice()).fmt(f)
     }
+
+    fn default() { Self::new() }
+    fn clone(&self) { Self::copy_from_slice(self.as_slice()) }
+
+    fn deref(&self) -> &[u8] { self.as_slice() }
+    fn deref_mut(&mut self) -> &mut [u8] { self.as_mut_slice() }
+
+    fn from(value: &[u8]) { BytesMut::from_vec(value.to_vec()) }
+    fn from(value: &str) { BytesMut::from_vec(value.as_bytes().to_vec()) }
+    fn from(value: Vec<u8>) { BytesMut::from_vec(value) }
+
+    fn eq(&self, &other: [u8]) { self.as_slice() == other }
+    fn eq(&self, &other: &[u8]) { self.as_slice() == *other }
 }
 
-crate::macros::deref! {
-    |&self: BytesMut| -> [u8] { self.as_slice() }
-    |&mut self: BytesMut| -> [u8] { self.as_mut_slice() }
-}
-
-crate::macros::partial_eq! {
-    |&self: BytesMut, other: [u8]| { self.as_slice() == other }
-    |&self: BytesMut, other: &[u8]| { self.as_slice() == *other }
-    |&self: BytesMut, other: str| { self.as_slice() == other.as_bytes() }
-    |&self: BytesMut, other: &str| { self.as_slice() == other.as_bytes() }
-    |&self: BytesMut, other: Vec<u8>| { self.as_slice() == other.as_slice() }
-    |&self: BytesMut, other: String| { self.as_slice() == other.as_bytes() }
-    |&self: BytesMut, other: Bytes| { self.as_slice() == other.as_slice() }
-    |&self: BytesMut, other: BytesMut| { self.as_slice() == other.as_slice() }
-}
-
-crate::macros::from! {
-    <'a>|value: &'a [u8]| -> BytesMut { BytesMut::from_vec(value.to_vec()) }
-    <'a>|value: &'a str| -> BytesMut { BytesMut::from_vec(value.as_bytes().to_vec()) }
-    |value: Vec<u8>| -> BytesMut { BytesMut::from_vec(value) }
-    |value: BytesMut| -> Bytes { value.freeze() }
+crate::macros::impl_std_traits! {
+    fn from(value: BytesMut) -> Bytes { value.freeze() }
 }

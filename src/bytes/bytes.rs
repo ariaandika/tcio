@@ -305,53 +305,38 @@ impl Bytes {
     }
 }
 
-impl Drop for Bytes {
-    #[inline]
-    fn drop(&mut self) {
-        unsafe { (self.vtable.drop)(&mut self.data, self.ptr, self.len) }
-    }
-}
-
-impl Clone for Bytes {
-    #[inline]
-    fn clone(&self) -> Bytes {
-        unsafe { (self.vtable.clone)(&self.data, self.ptr, self.len) }
-    }
-}
-
-impl Default for Bytes {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl std::fmt::Debug for Bytes {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         crate::fmt::lossy(&self.as_slice()).fmt(f)
     }
 }
 
-crate::macros::deref! {
-    |&self: Bytes| -> [u8] { self.as_slice() }
-}
+crate::macros::impl_std_traits! {
+    impl Bytes;
 
-crate::macros::partial_eq! {
-    |&self: Bytes, other: [u8]| { self.as_slice() == other }
-    |&self: Bytes, other: &[u8]| { self.as_slice() == *other }
-    |&self: Bytes, other: str| { self.as_slice() == other.as_bytes() }
-    |&self: Bytes, other: &str| { self.as_slice() == other.as_bytes() }
-    |&self: Bytes, other: Vec<u8>| { self.as_slice() == other.as_slice() }
-    |&self: Bytes, other: String| { self.as_slice() == other.as_bytes() }
-    |&self: Bytes, other: Bytes| { self.as_slice() == other.as_slice() }
-    |&self: Bytes, other: BytesMut| { self.as_slice() == other.as_slice() }
-}
+    fn drop(&mut self) {
+        unsafe { (self.vtable.drop)(&mut self.data, self.ptr, self.len) }
+    }
 
-crate::macros::from! {
-    |value: &'static [u8]| -> Bytes { Bytes::from_static(value) }
-    |value: &'static str| -> Bytes { Bytes::from_static(value.as_bytes()) }
-    // |value: Box<[u8]>| -> Bytes { todo!() }
-    |value: Vec<u8>| -> Bytes { Bytes::from_vec(value) }
-    |value: String| -> Bytes { Bytes::from_vec(value.into_bytes()) }
+    fn clone(&self) {
+        unsafe { (self.vtable.clone)(&self.data, self.ptr, self.len) }
+    }
+
+    fn default() { Self::new() }
+    fn deref(&self) -> &[u8] { self.as_slice() }
+
+    fn from(value: &'static [u8]) { Bytes::from_static(value) }
+    fn from(value: &'static str) { Bytes::from_static(value.as_bytes()) }
+    fn from(value: Vec<u8>) { Bytes::from_vec(value) }
+    fn from(value: String) { Bytes::from_vec(value.into_bytes()) }
+    // fn from(value: Box<u8>) -> Bytes { todo!() }
+
+    fn eq(&self, &other: [u8]) { <[u8]>::eq(self, other) }
+    fn eq(&self, &other: &[u8]) { <[u8]>::eq(self, *other) }
+    fn eq(&self, &other: str) { <[u8]>::eq(self, other.as_bytes()) }
+    fn eq(&self, &other: &str) { <[u8]>::eq(self, other.as_bytes()) }
+    fn eq(&self, &other: Vec<u8>) { <[u8]>::eq(self, other.as_slice()) }
+    fn eq(&self, &other: &Vec<u8>) { <[u8]>::eq(self, other.as_slice()) }
 }
 
 // ===== Vtable =====
