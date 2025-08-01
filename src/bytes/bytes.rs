@@ -1,11 +1,10 @@
-#![allow(missing_docs, reason = "wip")]
 use std::{
     mem::{self, ManuallyDrop},
     ptr, slice,
     sync::atomic::{AtomicPtr, Ordering},
 };
 
-use super::BytesMut;
+use super::{Buf, BytesMut};
 
 /// A cheaply cloneable and sliceable chunk of contiguous memory.
 pub struct Bytes {
@@ -105,20 +104,6 @@ impl Bytes {
     #[inline]
     pub fn is_unique(&self) -> bool {
         unsafe { (self.vtable.is_unique)(&self.data) }
-    }
-
-    #[inline]
-    pub fn advance(&mut self, cnt: usize) {
-        assert!(
-            cnt <= self.len(),
-            "cannot advance past `remaining`: {:?} <= {:?}",
-            cnt,
-            self.len(),
-        );
-
-        unsafe {
-            self.advance_unchecked(cnt);
-        }
     }
 
     #[inline]
@@ -337,6 +322,37 @@ crate::macros::impl_std_traits! {
     fn eq(&self, &other: &str) { <[u8]>::eq(self, other.as_bytes()) }
     fn eq(&self, &other: Vec<u8>) { <[u8]>::eq(self, other.as_slice()) }
     fn eq(&self, &other: &Vec<u8>) { <[u8]>::eq(self, other.as_slice()) }
+}
+
+impl Buf for Bytes {
+    #[inline]
+    fn remaining(&self) -> usize {
+        self.len
+    }
+
+    #[inline]
+    fn chunk(&self) -> &[u8] {
+        self.as_slice()
+    }
+
+    #[inline]
+    fn advance(&mut self, cnt: usize) {
+        assert!(
+            cnt <= self.len(),
+            "cannot advance past `remaining`: {:?} <= {:?}",
+            cnt,
+            self.len(),
+        );
+
+        unsafe {
+            self.advance_unchecked(cnt);
+        }
+    }
+
+    #[inline]
+    fn copy_to_bytes(&mut self, len: usize) -> super::Bytes {
+        self.split_to(len)
+    }
 }
 
 // ===== Vtable =====

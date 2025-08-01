@@ -5,7 +5,7 @@ use std::{
     slice,
 };
 
-use super::{Data, DataMut, Shared, Bytes};
+use super::{Buf, Bytes, Data, DataMut, Shared};
 
 // BytesMut is a unique `&mut [u8]` over a shared heap allocated `[u8]`
 //
@@ -410,21 +410,6 @@ impl BytesMut {
 impl BytesMut {
     // ===== Read =====
 
-    /// Advance `BytesMut` forward.
-    #[inline]
-    pub fn advance(&mut self, cnt: usize) {
-        assert!(
-            cnt <= self.len,
-            "cannot advance past `len`: {:?} <= {:?}",
-            cnt,
-            self.len,
-        );
-        unsafe {
-            // `cnt <= self.len`, and `self.len <= self.cap`
-            self.advance_unchecked(cnt);
-        }
-    }
-
     /// Removes the bytes from the current view, returning them in a new `BytesMut` handle.
     ///
     /// Afterwards, `self` will be empty, but will retain any additional capacity that it had before
@@ -585,4 +570,35 @@ crate::macros::impl_std_traits! {
 
 crate::macros::impl_std_traits! {
     fn from(value: BytesMut) -> Bytes { value.freeze() }
+}
+
+impl Buf for BytesMut {
+    #[inline]
+    fn remaining(&self) -> usize {
+        self.len
+    }
+
+    #[inline]
+    fn chunk(&self) -> &[u8] {
+        self.as_slice()
+    }
+
+    #[inline]
+    fn advance(&mut self, cnt: usize) {
+        assert!(
+            cnt <= self.len,
+            "cannot advance past `len`: {:?} <= {:?}",
+            cnt,
+            self.len,
+        );
+        unsafe {
+            // `cnt <= self.len`, and `self.len <= self.cap`
+            self.advance_unchecked(cnt);
+        }
+    }
+
+    #[inline]
+    fn copy_to_bytes(&mut self, len: usize) -> super::Bytes {
+        self.split_to(len).freeze()
+    }
 }
