@@ -24,3 +24,6 @@ pub use bytes::Bytes;
 pub use bytes_mut::BytesMut;
 pub use bytestr::ByteStr;
 pub use cursor::Cursor;
+
+#[cfg(test)]
+mod test;
