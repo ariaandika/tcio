@@ -168,13 +168,12 @@ impl From<std::borrow::Cow<'static,str>> for ByteStr {
     }
 }
 
-// TODO: wait for Bytes::from(Box<u8>)
-// impl From<Box<str>> for ByteStr {
-//     #[inline]
-//     fn from(value: Box<str>) -> Self {
-//         Self { bytes: Bytes::from(value.into_boxed_bytes()) }
-//     }
-// }
+impl From<Box<str>> for ByteStr {
+    #[inline]
+    fn from(value: Box<str>) -> Self {
+        Self { bytes: Bytes::from(value.into_boxed_bytes()) }
+    }
+}
 
 impl From<String> for ByteStr {
     #[inline]

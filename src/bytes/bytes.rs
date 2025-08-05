@@ -4,13 +4,17 @@ use std::{
     sync::atomic::{AtomicPtr, Ordering},
 };
 
-use super::{Buf, BytesMut};
+use super::{
+    Buf, BytesMut,
+    shared,
+};
 
 /// A cheaply cloneable and sliceable chunk of contiguous memory.
 pub struct Bytes {
     ptr: *const u8,
     len: usize,
-    // inlined "trait object"
+    /// it is requires to be atomic,
+    /// buffer promotion requires to update the ptr
     data: AtomicPtr<()>,
     vtable: &'static Vtable,
 }
@@ -37,40 +41,69 @@ impl Bytes {
             ptr: bytes.as_ptr(),
             len: bytes.len(),
             data: AtomicPtr::new(ptr::null_mut()),
-            vtable: &STATIC_VTABLE,
+            vtable: Vtable::static_bytes(),
         }
     }
 
-    pub(crate) fn from_vec(mut vec: Vec<u8>) -> Bytes {
+    pub(crate) fn from_vec(mut vec: Vec<u8>) -> Self {
         let ptr = vec.as_mut_ptr();
         let len = vec.len();
         let cap = vec.capacity();
 
-        // Avoid an extra allocation if possible.
+        // `into_boxed_slice`, which call `shrink_to_fit` reallocate with
+        // condition `capacity > len`
+        //
+        // the freezed returns from `BytesMut::split` and `BytesMut::split_to`
+        // will trigger this branch
         if len == cap {
-            todo!()
-            // return Bytes::from(vec.into_boxed_slice());
+            return Self::from_box(vec.into_boxed_slice());
         }
 
-        // PERF: maybe we can start in `Owned` mode instead of immediately allocating.
-        // the problem is cloning can be done concurrently, which can cause concurent
-        // allocation, which should be taken care of
-        let shared = Box::into_raw(Box::new(Shared::from_vec(vec, 1)));
+        // PERF: we can start in unpromoted for `Shared` storage
+        // Problems:
+        // - we need to store capacity of the vector
+        // - the `data` field already contains original pointer
+        //   in case of `advance` which will change `ptr`
+        // Consideration:
+        // - `into_boxed_slice`: reallocate and copy the bytes, as expensive as vector length
+        // - `shared::promote_with_vec`: allocate `AtomicUsize`, pointer, and capacity (3 word)
+
+        let shared = shared::promote_with_vec(vec, 1);
 
         Bytes {
             ptr,
             len,
-            data: AtomicPtr::new(shared as _),
-            vtable: &SHARED_VTABLE,
+            data: AtomicPtr::new(shared.cast()),
+            vtable: Vtable::shared_promoted(),
         }
     }
 
-    pub(crate) fn from_shared(ptr: *const u8, len: usize, shared: *mut Shared) -> Bytes {
+    fn from_box(mut boxed: Box<[u8]>) -> Self {
+        let len = boxed.len();
+        let ptr = boxed.as_mut_ptr();
+
+        let _boxed = ManuallyDrop::new(boxed);
+        let (data, vtable) = Vtable::shared_unpromoted(ptr);
+
+        Bytes {
+            ptr,
+            len,
+            data: AtomicPtr::new(data.cast()),
+            vtable,
+        }
+    }
+
+    pub fn from_mut(shared: *mut shared::Shared, mut bytesm: BytesMut) -> Self {
+        debug_assert!(shared::is_promoted(shared));
+
+        let ptr = bytesm.as_mut_ptr();
+        let len = bytesm.len();
+
         Bytes {
             ptr,
             len,
             data: AtomicPtr::new(shared as _),
-            vtable: &SHARED_VTABLE,
+            vtable: Vtable::shared_promoted(),
         }
     }
 
@@ -123,16 +156,20 @@ impl Bytes {
     /// Converts a [`Bytes`] into a byte vector.
     #[inline]
     pub fn into_vec(self) -> Vec<u8> {
-        let me = ManuallyDrop::new(self);
-        unsafe { (me.vtable.into_vec)(&me.data, me.ptr, me.len) }
+        let mut mem = ManuallyDrop::new(self);
+        let me = &mut *mem;
+        unsafe { (me.vtable.into_vec)(&mut me.data, me.ptr, me.len) }
     }
+        // let (into_vec, ptr, len) = (me.into_vec, me.ptr, me.len);
+        // unsafe { (into_vec)(&mut me.data, ptr, len) }
 
     /// Try to convert [`Bytes`] into [`BytesMut`] if its unique.
     #[inline]
     pub fn try_into_mut(self) -> Result<BytesMut, Self> {
         if self.is_unique() {
-            let me = ManuallyDrop::new(self);
-            Ok(unsafe { (me.vtable.into_mut)(&me.data, me.ptr, me.len) })
+            let mut mem = ManuallyDrop::new(self);
+            let me = &mut *mem;
+            Ok(unsafe { (me.vtable.into_mut)(&mut me.data, me.ptr, me.len) })
         } else {
             Err(self)
         }
@@ -152,7 +189,7 @@ impl Bytes {
             ptr,
             len: 0,
             data: AtomicPtr::new(ptr::null_mut()),
-            vtable: &STATIC_VTABLE,
+            vtable: Vtable::static_bytes(),
         }
     }
 
@@ -309,11 +346,11 @@ crate::macros::impl_std_traits! {
     fn default() { Self::new() }
     fn deref(&self) -> &[u8] { self.as_slice() }
 
-    fn from(value: &'static [u8]) { Bytes::from_static(value) }
-    fn from(value: &'static str) { Bytes::from_static(value.as_bytes()) }
-    fn from(value: Vec<u8>) { Bytes::from_vec(value) }
-    fn from(value: String) { Bytes::from_vec(value.into_bytes()) }
-    // fn from(value: Box<u8>) -> Bytes { todo!() }
+    fn from(value: &'static [u8]) { Self::from_static(value) }
+    fn from(value: &'static str) { Self::from_static(value.as_bytes()) }
+    fn from(value: Vec<u8>) { Self::from_vec(value) }
+    fn from(value: String) { Self::from_vec(value.into_bytes()) }
+    fn from(value: Box<[u8]>) -> Self { Self::from_box(value) }
 
     fn eq(&self, &other: [u8]) { <[u8]>::eq(self, other) }
     fn eq(&self, &other: &[u8]) { <[u8]>::eq(self, *other) }
@@ -363,107 +400,228 @@ impl Buf for Bytes {
 struct Vtable {
     /// fn(data, ptr, len)
     pub clone: unsafe fn(&AtomicPtr<()>, *const u8, usize) -> Bytes,
+    /// fn(data)
+    pub is_unique: unsafe fn(&AtomicPtr<()>) -> bool,
     /// fn(data, ptr, len)
     ///
     /// `into_*` consumes the `Bytes`, returning the respective value.
-    pub into_vec: unsafe fn(&AtomicPtr<()>, *const u8, usize) -> Vec<u8>,
-    pub into_mut: unsafe fn(&AtomicPtr<()>, *const u8, usize) -> BytesMut,
-    /// fn(data)
-    pub is_unique: unsafe fn(&AtomicPtr<()>) -> bool,
+    pub into_vec: unsafe fn(&mut AtomicPtr<()>, *const u8, usize) -> Vec<u8>,
+    pub into_mut: unsafe fn(&mut AtomicPtr<()>, *const u8, usize) -> BytesMut,
     /// fn(data, ptr, len)
     pub drop: unsafe fn(&mut AtomicPtr<()>, *const u8, usize),
 }
 
 // ===== Static Vtable =====
 
-const STATIC_VTABLE: Vtable = Vtable {
-    clone: static_clone,
-    into_vec: static_into_vec,
-    into_mut: static_into_mut,
-    is_unique: static_is_unique,
-    drop: static_drop,
-};
+mod static_vtable {
+    use super::*;
 
-unsafe fn static_clone(_: &AtomicPtr<()>, ptr: *const u8, len: usize) -> Bytes {
-    unsafe { Bytes::from_static(slice::from_raw_parts(ptr, len)) }
-}
+    impl Vtable {
+        pub(super) const fn static_bytes() -> &'static Vtable {
+            &STATIC_VTABLE
+        }
+    }
 
-unsafe fn static_into_vec(_: &AtomicPtr<()>, ptr: *const u8, len: usize) -> Vec<u8> {
-    unsafe { slice::from_raw_parts(ptr, len).to_vec() }
-}
+    const STATIC_VTABLE: Vtable = Vtable {
+        clone: static_clone,
+        into_vec: static_into_vec,
+        into_mut: static_into_mut,
+        is_unique: static_is_unique,
+        drop: static_drop,
+    };
 
-unsafe fn static_into_mut(_: &AtomicPtr<()>, ptr: *const u8, len: usize) -> BytesMut {
-    unsafe { BytesMut::from_vec(slice::from_raw_parts(ptr, len).to_vec()) }
-}
+    unsafe fn static_clone(_: &AtomicPtr<()>, ptr: *const u8, len: usize) -> Bytes {
+        unsafe { Bytes::from_static(slice::from_raw_parts(ptr, len)) }
+    }
 
-fn static_is_unique(_: &AtomicPtr<()>) -> bool {
-    false
-}
+    fn static_is_unique(_: &AtomicPtr<()>) -> bool {
+        false
+    }
 
-unsafe fn static_drop(_: &mut AtomicPtr<()>, _: *const u8, _: usize) {
-    // nothing to drop for &'static [u8]
+    unsafe fn static_into_vec(_: &mut AtomicPtr<()>, ptr: *const u8, len: usize) -> Vec<u8> {
+        unsafe { slice::from_raw_parts(ptr, len).to_vec() }
+    }
+
+    unsafe fn static_into_mut(_: &mut AtomicPtr<()>, ptr: *const u8, len: usize) -> BytesMut {
+        unsafe { BytesMut::from_vec(slice::from_raw_parts(ptr, len).to_vec()) }
+    }
+
+    unsafe fn static_drop(_: &mut AtomicPtr<()>, _: *const u8, _: usize) {
+        // nothing to drop for &'static [u8]
+    }
 }
 
 // ===== Shared Vtable =====
 
-use super::Shared;
+mod shared_vtable {
+    use super::{*, shared::Shared};
 
-static SHARED_VTABLE: Vtable = Vtable {
-    clone: shared_clone,
-    into_vec: shared_into_vec,
-    into_mut: shared_into_mut,
-    is_unique: shared_is_unique,
-    drop: shared_drop,
-};
-
-unsafe fn shared_clone(data: &AtomicPtr<()>, ptr: *const u8, len: usize) -> Bytes {
-    let shared = data.load(Ordering::Relaxed) as *mut Shared;
-    unsafe { (*shared).increment() };
-    Bytes {
-        ptr,
-        len,
-        data: AtomicPtr::new(shared as _),
-        vtable: &SHARED_VTABLE,
-    }
-}
-
-unsafe fn shared_into_vec(data: &AtomicPtr<()>, ptr: *const u8, len: usize) -> Vec<u8> {
-    // if its unique, take the ownership,
-    // otherwise, it copies
-    let shared = data.load(Ordering::Relaxed).cast();
-
-    unsafe {
-        match Shared::release_into_inner(shared) {
-            Some(mut vec) => {
-                ptr::copy(ptr, vec.as_mut_ptr(), len);
-                vec
+    impl Vtable {
+        pub(super) fn shared_unpromoted(data: *mut u8) -> (*mut u8, &'static Vtable) {
+            if shared::is_payload_compliance(data as _) {
+                (data, &SHARED)
+            } else {
+                (map_ptr(data), &MAPPED_SHARED)
             }
-            None => slice::from_raw_parts(ptr, len).to_vec(),
+        }
+
+        pub(super) fn shared_promoted() -> &'static Vtable {
+            // All shared vtable have the same behavior for promoted shared.
+            &SHARED
         }
     }
-}
 
-unsafe fn shared_into_mut(data: &AtomicPtr<()>, ptr: *const u8, len: usize) -> BytesMut {
-    let shared = data.load(Ordering::Relaxed).cast();
+    fn noop(shared: *mut u8) -> *mut u8 {
+        shared
+    }
 
-    unsafe {
-        match Shared::release_into_inner(shared) {
-            Some(vec) => {
-                let off = ptr.offset_from(vec.as_ptr()) as usize;
-                let mut bytes = BytesMut::from_vec(vec);
-                bytes.advance_unchecked(off);
-                bytes
+    fn map_ptr(shared: *mut u8) -> *mut u8 {
+        shared.with_addr(!(shared as usize))
+    }
+
+    macro_rules! vtable_with_map {
+        ($map_id:ident) => {
+            Vtable {
+                clone: |data, ptr, len| unsafe { clone(data, ptr, len, $map_id) },
+                is_unique,
+                into_vec: |data, ptr, len| unsafe { into_vec(data, ptr, len, $map_id) },
+                into_mut: |data, ptr, len| unsafe { into_mut(data, ptr, len, $map_id) },
+                drop: |data, ptr, len| unsafe { drop(data, ptr, len, $map_id) },
+            }
+        };
+    }
+
+    static SHARED: Vtable = vtable_with_map!(noop);
+
+    /// Represent `Shared` with even pointer, that **not** comply with `Shared` arbitrary payload
+    /// requirements. Therefore, it is required to map the pointer before retrieving the stored
+    /// pointer.
+    static MAPPED_SHARED: Vtable = vtable_with_map!(map_ptr);
+
+    // NOTE:
+    // in shared Vtable, the atomic pointer is `*mut Shared`,
+    // and the arbitrary payload contains the buffer original pointer
+
+    unsafe fn clone(
+        data: &AtomicPtr<()>,
+        ptr: *const u8,
+        len: usize,
+        map_ptr: impl Fn(*mut u8) -> *mut u8,
+    ) -> Bytes {
+        let shared = data.load(Ordering::Relaxed).cast::<Shared>();
+
+        match shared::as_unpromoted_raw(shared) {
+            Ok(shared) => {
+                // the only branch can contain unpromoted is from `Box<[u8]>`,
+                // which the same as full length vector
+                let vec = unsafe { Vec::from_raw_parts(map_ptr(shared.cast()), len, len) };
+                let shared = shared::promote_with_vec(vec, 1);
+
+                // `unpromoted` means there is only one handle,
+                // that means its impossible to have concurent promotion
+                data.store(shared.cast(), Ordering::Relaxed);
+            }
+            Err(shared) => shared::increment(shared),
+        }
+
+        Bytes {
+            ptr,
+            len,
+            data: AtomicPtr::new(shared.cast()),
+            vtable: Vtable::shared_promoted(),
+        }
+    }
+
+    unsafe fn is_unique(data: &AtomicPtr<()>) -> bool {
+        let shared = data.load(Ordering::Relaxed).cast::<Shared>();
+
+        match shared::as_unpromoted(shared) {
+            Ok(_) => true,
+            Err(shared) => shared::is_unique(shared),
+        }
+    }
+
+    unsafe fn into_vec(
+        data: &mut AtomicPtr<()>,
+        ptr: *const u8,
+        len: usize,
+        map_ptr: impl Fn(*mut u8) -> *mut u8,
+    ) -> Vec<u8> {
+        let shared = data.get_mut().cast();
+
+        unsafe {
+            match shared::as_unpromoted_raw(shared) {
+                Ok(buffer) => {
+                    // the only branch can contain unpromoted is from `Box<[u8]>`,
+                    // which the same as full length vector
+                    Vec::from_raw_parts(map_ptr(buffer.cast()), len, len)
+                }
+                Err(shared) => {
+                    let offset = ptr.offset_from(shared.as_ptr()) as usize;
+
+                    match shared::release_into_vec(shared, len + offset) {
+                        Some(mut vec) => {
+                            if offset != 0 {
+                                // `Bytes` has been `advanced`, `Vec` cannot represent that,
+                                // so we can only copy the buffer backwards
+                                ptr::copy(ptr, vec.as_mut_ptr(), len);
+                            }
+                            vec
+                        }
+                        None => slice::from_raw_parts(ptr, len).to_vec(),
+                    }
+                }
+            }
+        }
+    }
+
+    unsafe fn into_mut(
+        data: &mut AtomicPtr<()>,
+        ptr: *const u8,
+        len: usize,
+        map_ptr: impl Fn(*mut u8) -> *mut u8,
+    ) -> BytesMut {
+        let shared = data.get_mut().cast();
+
+        match shared::as_unpromoted_raw(shared) {
+            Ok(buffer) => {
+                // the only branch can contain unpromoted is from `Box<[u8]>`,
+                // which the same as full length vector
+                unsafe { BytesMut::from_vec(Vec::from_raw_parts(map_ptr(buffer.cast()), len, len)) }
+            }
+            Err(shared) => unsafe {
+                let offset = ptr.offset_from(shared.as_ptr()) as usize;
+
+                match shared::release_into_vec(shared, len + offset) {
+                    Some(vec) => {
+                        let off = ptr.offset_from(vec.as_ptr()) as usize;
+                        let mut bytes = BytesMut::from_vec(vec);
+                        bytes.advance_unchecked(off);
+                        bytes
+                    }
+                    None => BytesMut::from_vec(slice::from_raw_parts(ptr, len).to_vec()),
+                }
             },
-            None => BytesMut::from_vec(slice::from_raw_parts(ptr, len).to_vec()),
         }
     }
-}
 
+    unsafe fn drop(
+        data: &mut AtomicPtr<()>,
+        _: *const u8,
+        len: usize,
+        map_ptr: impl Fn(*mut u8) -> *mut u8,
+    ) {
+        let shared = data.get_mut().cast();
 
-pub(crate) unsafe fn shared_is_unique(data: &AtomicPtr<()>) -> bool {
-    unsafe { Shared::is_shared_unique(&*data.load(Ordering::Acquire).cast()) }
-}
-
-unsafe fn shared_drop(data: &mut AtomicPtr<()>, _: *const u8, _: usize) {
-    Shared::release(data.get_mut().cast());
+        match shared::as_unpromoted_raw(shared) {
+            Ok(buffer) => {
+                // the only branch can contain unpromoted is from `Box<[u8]>`,
+                // which the same as full length vector
+                let _ = unsafe { Vec::<u8>::from_raw_parts(map_ptr(buffer.cast()), len, len) };
+            }
+            Err(shared) => {
+                shared::release(shared);
+            }
+        }
+    }
 }

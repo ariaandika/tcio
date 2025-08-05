@@ -18,8 +18,6 @@ mod bytes_mut;
 mod bytestr;
 mod cursor;
 
-use shared::{Shared, Data, DataMut};
-
 pub use buf::Buf;
 pub use buf_mut::BufMut;
 pub use bytes::Bytes;

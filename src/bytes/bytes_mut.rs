@@ -5,7 +5,10 @@ use std::{
     slice,
 };
 
-use super::{Buf, Bytes, Data, DataMut, Shared};
+use super::{
+    Buf, Bytes,
+    shared::{self, Shared}
+};
 
 // BytesMut is a unique `&mut [u8]` over a shared heap allocated `[u8]`
 //
@@ -78,6 +81,9 @@ use super::{Buf, Bytes, Data, DataMut, Shared};
 //
 // in this case, it combine the logic from case 1 and 2
 
+const _: [(); size_of::<usize>() * 4] = [(); size_of::<BytesMut>()];
+const _: [(); size_of::<usize>() * 4] = [(); size_of::<Option<BytesMut>>()];
+
 /// A unique reference to a contiguous slice of memory.
 pub struct BytesMut {
     ptr: NonNull<u8>,
@@ -120,7 +126,7 @@ impl BytesMut {
             ptr,
             len,
             cap,
-            data: Shared::data_owned(),
+            data: shared::new_unpromoted(),
         }
     }
 
@@ -190,39 +196,18 @@ impl BytesMut {
         }
     }
 
-    /// Converts `self` into an immutable `Bytes`.
-    #[inline]
-    pub fn freeze(self) -> Bytes {
-        let me = ManuallyDrop::new(self);
 
-        match me.data() {
-            Data::Owned { data: offset } => unsafe {
-                let vec = me.original_buffer();
-                let mut bytes = Bytes::from_vec(vec);
-                bytes.advance(offset);
-                bytes
-            },
-            Data::Shared(_) => Bytes::from_shared(me.ptr.as_ptr(), me.len, me.data),
-        }
-    }
+    // private
 
-
-    // inner
-
-    fn data(&self) -> Data<'_> {
-        Shared::data(self.data)
-    }
-
-    fn data_mut(&mut self) -> DataMut<'_> {
-        Shared::data_mut(self.data)
-    }
-
+    /// Consume `self.data` into owned `Vec<u8>`.
+    ///
     /// # Safety
     ///
-    /// ensure `self.data` does not have other ownership
-    unsafe fn original_buffer(&self) -> Vec<u8> {
-        let offset = Shared::owned_data(self.data);
-
+    /// Ensure that nothing else uses the pointer after calling this function.
+    ///
+    /// Offset must be acquired from [`Handle`][super::shared2::Handle].
+    unsafe fn original_buffer(&self, offset: usize) -> Vec<u8> {
+        // let offset = shared::payload(self.data);
         unsafe {
             Vec::from_raw_parts(
                 self.ptr.as_ptr().sub(offset),
@@ -259,9 +244,9 @@ impl BytesMut {
     /// Try to reclaim all leftover capacity without allocating.
     #[inline]
     pub fn try_reclaim_full(&mut self) -> bool {
-        let additional = match self.data() {
-            Data::Owned { data: offset } => offset + (self.cap - self.len),
-            Data::Shared(shared) => shared.capacity() - self.len,
+        let additional = match shared::as_unpromoted(self.data) {
+            Ok(offset) => offset + (self.cap - self.len),
+            Err(shared) => shared.capacity() - self.len,
         };
 
         self.reserve_inner(additional, false)
@@ -280,23 +265,23 @@ impl BytesMut {
         let ptr = self.ptr.as_ptr();
         let len = self.len;
 
-        match self.data_mut() {
-            DataMut::Owned { data: offset } => {
+        match shared::as_unpromoted_mut(self.data) {
+            Ok(offset) => {
                 let remaining = offset + (self.cap - self.len);
 
                 // Case 1, copy the data backwards
                 if remaining >= additional && offset >= len {
                     unsafe {
-                        let start_ptr = ptr.sub(offset);
+                        let buf_ptr = ptr.sub(offset);
 
                         // `offset >= len` guarantee no overlap
-                        ptr::copy_nonoverlapping(ptr, start_ptr, len);
+                        ptr::copy_nonoverlapping(ptr, buf_ptr, len);
 
-                        self.ptr = NonNull::new_unchecked(start_ptr);
+                        self.ptr = NonNull::new_unchecked(buf_ptr);
                         self.cap += offset;
 
                         // reset the `offset`
-                        Shared::set_owned_data(&mut self.data, 0);
+                        self.data = shared::mask_payload(self.data, 0);
 
                         return true;
                     }
@@ -307,61 +292,69 @@ impl BytesMut {
                 }
 
                 unsafe {
-                    // follow `Vec::reserve` logic instead of `Vec::with_capacity`
+                    // follow `Vec::reserve` logic instead of `Vec::with_capacity`,
+                    // `max(exponential, additional)`
                     let capacity = cmp::max(self.cap * 2, len + additional);
 
                     let mut new_vec = ManuallyDrop::new(Vec::with_capacity(capacity));
                     let new_ptr = new_vec.as_mut_ptr();
 
                     ptr::copy_nonoverlapping(ptr, new_ptr, len);
-                    new_vec.set_len(len);
 
                     // drop the original buffer *after* copy
-                    drop(self.original_buffer());
+                    drop(self.original_buffer(offset));
+
 
                     self.ptr = NonNull::new_unchecked(new_ptr);
                     self.cap = new_vec.capacity();
-
                     // reset the `offset`
-                    Shared::set_owned_data(&mut self.data, 0);
-
-                    true
+                    self.data = shared::mask_payload(self.data, 0);
                 }
+
+                true
             },
-            DataMut::Shared(shared) if shared.is_shared_unique() => {
-                let shared_cap = shared.capacity();
-                let shared_ptr = shared.as_mut_ptr();
-                let offset = unsafe { ptr.offset_from(shared_ptr) } as usize;
+            Err(shared) => {
+                if shared::is_unique(shared) {
+                    let shared_ptr = shared.as_ptr();
+                    let offset = unsafe { ptr.offset_from(shared_ptr) } as usize;
 
-                // reclaim the leftover tail capacity
-                {
-                    let remaining_tail = shared_cap - (self.cap + offset);
-                    self.cap += remaining_tail;
+                    // reclaim the leftover tail capacity
+                    {
+                        let shared_cap = shared.capacity();
+                        let remaining_tail = shared_cap - (self.cap + offset);
+                        self.cap += remaining_tail;
 
-                    // Case 2
-                    if remaining_tail >= additional {
-                        return true;
+                        // Case 2
+                        if remaining_tail >= additional {
+                            return true;
+                        }
                     }
-                }
 
-                let remaining = offset + (self.cap - self.len);
+                    let remaining = offset + (self.cap - self.len);
 
-                // Case 1, copy the data backwards
-                if remaining >= additional && offset >= len {
-                    unsafe {
-                        // `offset >= len` guarantee no overlap
-                        ptr::copy_nonoverlapping(ptr, shared_ptr, len);
+                    // Case 1, copy the data backwards
+                    if remaining >= additional && offset >= len {
+                        unsafe {
+                            // `offset >= len` guarantee no overlap
+                            ptr::copy_nonoverlapping(ptr, shared_ptr, len);
 
-                        self.ptr = NonNull::new_unchecked(shared_ptr);
-                        self.cap += offset;
+                            // reset the `offset`
+                            self.ptr = NonNull::new_unchecked(shared_ptr);
+                            self.cap += offset;
 
-                        return true;
+                            return true;
+                        }
+                    } else {
+                        // cannot reclaim, and `!allocate`
+                        return false;
                     }
                 }
 
                 if !allocate {
                     return false;
                 }
+
+                // reallocate
 
                 unsafe {
                     // follow `Vec::reserve` logic instead of `Vec::with_capacity`
@@ -371,37 +364,16 @@ impl BytesMut {
                     let new_ptr = new_vec.as_mut_ptr();
 
                     ptr::copy_nonoverlapping(ptr, new_ptr, len);
-                    new_vec.set_len(len);
 
                     // release the shared buffer *after* copy
-                    Shared::release(self.data);
+                    shared::release(shared);
 
                     self.ptr = NonNull::new_unchecked(new_ptr);
                     self.cap = new_vec.capacity();
-                    self.data = Shared::data_owned(); // switch back to `Owned` state
+                    self.data = shared::new_unpromoted();
 
                     true
                 }
-            },
-            DataMut::Shared(_) if !allocate => false,
-            DataMut::Shared(_) => unsafe {
-                // follow `Vec::reserve` logic instead of `Vec::with_capacity`
-                let capacity = cmp::max(self.cap * 2, len + additional);
-
-                let mut new_vec = ManuallyDrop::new(Vec::with_capacity(capacity));
-                let new_ptr = new_vec.as_mut_ptr();
-
-                ptr::copy_nonoverlapping(ptr, new_ptr, len);
-                new_vec.set_len(len);
-
-                // release the shared buffer *after* copy
-                Shared::release(self.data);
-
-                self.ptr = NonNull::new_unchecked(new_ptr);
-                self.cap = new_vec.capacity();
-                self.data = Shared::data_owned(); // switch back to `Owned` state
-
-                true
             }
         }
     }
@@ -409,6 +381,20 @@ impl BytesMut {
 
 impl BytesMut {
     // ===== Read =====
+
+    /// Converts `self` into an immutable `Bytes`.
+    #[inline]
+    pub fn freeze(self) -> Bytes {
+        match shared::as_unpromoted(self.data) {
+            Ok(offset) => unsafe {
+                let vec = ManuallyDrop::new(self).original_buffer(offset);
+                let mut bytes = Bytes::from_vec(vec);
+                bytes.advance(offset);
+                bytes
+            },
+            Err(_) => Bytes::from_mut(self.data, self),
+        }
+    }
 
     /// Removes the bytes from the current view, returning them in a new `BytesMut` handle.
     ///
@@ -482,8 +468,8 @@ impl BytesMut {
             "BytesMut::advance_unchecked out of bounds"
         );
 
-        if let Data::Owned { data: offset } = Shared::data(self.data) {
-            Shared::set_owned_data(&mut self.data, offset + count);
+        if let Ok(offset) = shared::as_unpromoted(self.data) {
+            self.data = shared::mask_payload(self.data, offset + count);
 
             debug_assert!(offset + count < isize::MAX as usize);
         }
@@ -495,23 +481,18 @@ impl BytesMut {
         }
     }
 
-    fn shallow_clone(&mut self) -> BytesMut {
-        match self.data_mut() {
-            DataMut::Owned { .. } => {
-                // upgrade to `Shared` repr
-
-                // SAFETY: the ownership is transfered to `Shared`
-                let vec = unsafe { self.original_buffer() };
-
-                self.data = Box::into_raw(Box::new(Shared::from_vec(vec, 2)));
-
-                debug_assert!(Shared::is_repr_shared(self.data));
-            },
-            DataMut::Shared(shared) => {
-                shared.increment();
-            },
+    fn shallow_clone(&mut self) -> Self {
+        match shared::as_unpromoted(self.data) {
+            Ok(offset) => {
+                let vec = unsafe { self.original_buffer(offset) };
+                self.data = shared::promote_with_vec(vec, 2);
+                debug_assert!(shared::is_promoted(self.data));
+            }
+            Err(shared) => {
+                shared::increment(shared);
+            }
         }
-        // ref count incremented
+
         unsafe { ptr::read(self) }
     }
 }
@@ -541,12 +522,14 @@ crate::macros::impl_std_traits! {
     impl BytesMut;
 
     fn drop(&mut self) {
-        match self.data() {
-            Data::Owned { .. } => {
+        match shared::as_unpromoted_mut(self.data) {
+            Ok(offset) => {
                 // SAFETY: to be drop
-                unsafe { drop(self.original_buffer()) }
+                unsafe { drop(self.original_buffer(offset)) };
             },
-            Data::Shared(_) => Shared::release(self.data),
+            Err(shared) => {
+                shared::release(shared);
+            },
         }
     }
 
