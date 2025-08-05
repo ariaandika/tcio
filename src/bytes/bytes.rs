@@ -78,11 +78,10 @@ impl Bytes {
         }
     }
 
-    fn from_box(mut boxed: Box<[u8]>) -> Self {
+    fn from_box(boxed: Box<[u8]>) -> Self {
         let len = boxed.len();
-        let ptr = boxed.as_mut_ptr();
+        let ptr = Box::into_raw(boxed).cast();
 
-        let _boxed = ManuallyDrop::new(boxed);
         let (data, vtable) = Vtable::shared_unpromoted(ptr);
 
         Bytes {
@@ -479,24 +478,30 @@ mod shared_vtable {
         shared.with_addr(!(shared as usize))
     }
 
-    macro_rules! vtable_with_map {
-        ($map_id:ident) => {
-            Vtable {
-                clone: |data, ptr, len| unsafe { clone(data, ptr, len, $map_id) },
-                is_unique,
-                into_vec: |data, ptr, len| unsafe { into_vec(data, ptr, len, $map_id) },
-                into_mut: |data, ptr, len| unsafe { into_mut(data, ptr, len, $map_id) },
-                drop: |data, ptr, len| unsafe { drop(data, ptr, len, $map_id) },
-            }
+    macro_rules! with_map {
+        ($fn_id:ident, $map_id:ident) => {
+            |data, ptr, len| unsafe { $fn_id(data, ptr, len, $map_id) }
         };
     }
 
-    static SHARED: Vtable = vtable_with_map!(noop);
+    static SHARED: Vtable = Vtable {
+        clone: with_map!(clone, noop),
+        is_unique,
+        into_vec: with_map!(into_vec, noop),
+        into_mut: with_map!(into_mut, noop),
+        drop: with_map!(drop, noop),
+    };
 
     /// Represent `Shared` with even pointer, that **not** comply with `Shared` arbitrary payload
     /// requirements. Therefore, it is required to map the pointer before retrieving the stored
     /// pointer.
-    static MAPPED_SHARED: Vtable = vtable_with_map!(map_ptr);
+    static MAPPED_SHARED: Vtable = Vtable {
+        clone: with_map!(clone, map_ptr),
+        is_unique,
+        into_vec: with_map!(into_vec, map_ptr),
+        into_mut: with_map!(into_mut, map_ptr),
+        drop: with_map!(drop, map_ptr),
+    };
 
     // NOTE:
     // in shared Vtable, the atomic pointer is `*mut Shared`,
@@ -515,20 +520,28 @@ mod shared_vtable {
                 // the only branch can contain unpromoted is from `Box<[u8]>`,
                 // which the same as full length vector
                 let vec = unsafe { Vec::from_raw_parts(map_ptr(shared.cast()), len, len) };
-                let shared = shared::promote_with_vec(vec, 1);
+                let new_shared = shared::promote_with_vec(vec, 2);
 
                 // `unpromoted` means there is only one handle,
                 // that means its impossible to have concurent promotion
-                data.store(shared.cast(), Ordering::Relaxed);
+                data.store(new_shared.cast(), Ordering::Release);
+                assert!(shared::is_promoted(new_shared.cast()));
+                Bytes {
+                    ptr,
+                    len,
+                    data: AtomicPtr::new(new_shared.cast()),
+                    vtable: Vtable::shared_promoted(),
+                }
             }
-            Err(shared) => shared::increment(shared),
-        }
-
-        Bytes {
-            ptr,
-            len,
-            data: AtomicPtr::new(shared.cast()),
-            vtable: Vtable::shared_promoted(),
+            Err(shared_ref) => {
+                shared::increment(shared_ref);
+                Bytes {
+                    ptr,
+                    len,
+                    data: AtomicPtr::new(shared.cast()),
+                    vtable: Vtable::shared_promoted(),
+                }
+            },
         }
     }
 
@@ -550,7 +563,7 @@ mod shared_vtable {
         let shared = data.get_mut().cast();
 
         unsafe {
-            match shared::as_unpromoted_raw(shared) {
+            match shared::into_unpromoted_raw(shared) {
                 Ok(buffer) => {
                     // the only branch can contain unpromoted is from `Box<[u8]>`,
                     // which the same as full length vector
@@ -583,7 +596,7 @@ mod shared_vtable {
     ) -> BytesMut {
         let shared = data.get_mut().cast();
 
-        match shared::as_unpromoted_raw(shared) {
+        match shared::into_unpromoted_raw(shared) {
             Ok(buffer) => {
                 // the only branch can contain unpromoted is from `Box<[u8]>`,
                 // which the same as full length vector
@@ -613,7 +626,7 @@ mod shared_vtable {
     ) {
         let shared = data.get_mut().cast();
 
-        match shared::as_unpromoted_raw(shared) {
+        match shared::into_unpromoted_raw(shared) {
             Ok(buffer) => {
                 // the only branch can contain unpromoted is from `Box<[u8]>`,
                 // which the same as full length vector

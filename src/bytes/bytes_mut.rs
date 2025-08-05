@@ -366,7 +366,8 @@ impl BytesMut {
                     ptr::copy_nonoverlapping(ptr, new_ptr, len);
 
                     // release the shared buffer *after* copy
-                    shared::release(shared);
+                    // let old_shared = ptr::read(shared);
+                    shared::release(Box::from_raw(shared));
 
                     self.ptr = NonNull::new_unchecked(new_ptr);
                     self.cap = new_vec.capacity();
@@ -522,7 +523,7 @@ crate::macros::impl_std_traits! {
     impl BytesMut;
 
     fn drop(&mut self) {
-        match shared::as_unpromoted_mut(self.data) {
+        match shared::into_unpromoted(self.data) {
             Ok(offset) => {
                 // SAFETY: to be drop
                 unsafe { drop(self.original_buffer(offset)) };

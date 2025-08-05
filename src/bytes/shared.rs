@@ -34,7 +34,7 @@ impl Shared {
 // ===== Arbitrary =====
 
 pub const fn new_unpromoted() -> *mut Shared {
-    unsafe { ptr::null_mut::<Shared>().add(DATA_UNPROMOTED) }
+    ptr::null_mut::<u8>().wrapping_add(DATA_UNPROMOTED).cast()
 }
 
 pub fn is_unpromoted(data: *const Shared) -> bool {
@@ -66,6 +66,22 @@ pub fn as_unpromoted_mut<'a>(data: *mut Shared) -> Result<usize, &'a mut Shared>
         Ok(data as usize >> RESERVED_BIT_DATA)
     } else {
         Err(unsafe { &mut *data })
+    }
+}
+
+pub fn into_unpromoted_raw(data: *mut Shared) -> Result<*mut Shared, Box<Shared>> {
+    if is_unpromoted(data) {
+        Ok(data)
+    } else {
+        Err(unsafe { Box::from_raw(data) })
+    }
+}
+
+pub fn into_unpromoted(data: *mut Shared) -> Result<usize, Box<Shared>> {
+    if is_unpromoted(data) {
+        Ok(data as usize >> RESERVED_BIT_DATA)
+    } else {
+        Err(unsafe { Box::from_raw(data) })
     }
 }
 
@@ -119,22 +135,6 @@ pub fn promote_with_vec(mut vec: Vec<u8>, ref_count: usize) -> *mut Shared {
 
 // ===== Promoted =====
 
-fn build_vec(data: *mut Shared, len: usize) -> Vec<u8> {
-    assert!(is_promoted(data));
-
-    use std::ptr;
-
-    let buffer = unsafe { &*data };
-    assert!(len <= buffer.cap);
-
-    unsafe {
-        let ptr = ptr::slice_from_raw_parts_mut(buffer.ptr.as_ptr().cast(), buffer.cap);
-        let mut vec = <[u8]>::into_vec(Box::from_raw(ptr));
-        vec.set_len(len);
-        vec
-    }
-}
-
 pub fn is_unique(shared: &Shared) -> bool {
     use std::sync::atomic::Ordering;
     // The `Acquire` ordering synchronizes with the `Release` as
@@ -167,11 +167,14 @@ pub fn increment(shared: &Shared) {
     }
 }
 
-pub fn release(shared: &mut Shared) {
+#[allow(clippy::boxed_local, reason = "`Shared` always in the heap")]
+pub fn release(shared: Box<Shared>) {
     use std::sync::atomic::Ordering;
 
     // follow the drop procedure from `Arc`
     if shared.ref_count.fetch_sub(1, Ordering::Release) != 1 {
+        // do not deallocate the heap
+        let _shared = Box::into_raw(shared);
         return;
     }
 
@@ -197,8 +200,7 @@ pub fn release(shared: &mut Shared) {
     shared.ref_count.load(Ordering::Acquire);
 
     unsafe {
-        let _buffer = Box::from_raw(shared);
-        drop(build_vec(shared, 0));
+        drop(Vec::from_raw_parts(shared.ptr.as_ptr(), 0, shared.cap));
     }
 }
 
@@ -208,17 +210,19 @@ pub fn release(shared: &mut Shared) {
 /// # Safety
 ///
 /// Caller must ensure that `len` of data is initialized.
-pub unsafe fn release_into_vec(shared: &mut Shared, len: usize) -> Option<Vec<u8>> {
+#[allow(clippy::boxed_local, reason = "`Shared` always in the heap")]
+pub unsafe fn release_into_vec(shared: Box<Shared>, len: usize) -> Option<Vec<u8>> {
     use std::sync::atomic::Ordering;
 
     if shared.ref_count.fetch_sub(1, Ordering::Release) != 1 {
+        // do not deallocate the heap
+        let _shared = Box::into_raw(shared);
         return None;
     }
 
     shared.ref_count.load(Ordering::Acquire);
 
     unsafe {
-        let _buffer = Box::from_raw(shared);
-        Some(build_vec(shared, len))
+        Some(Vec::from_raw_parts(shared.ptr.as_ptr(), len, shared.cap))
     }
 }
