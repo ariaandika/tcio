@@ -114,7 +114,7 @@ pub fn mask_payload(data: *mut Shared, value: usize) -> *mut Shared {
     assert!(is_unpromoted(data));
     assert_eq!(value & MSB, 0);
 
-    ((value << RESERVED_BIT_DATA) | DATA_UNPROMOTED) as _
+    data.with_addr((value << RESERVED_BIT_DATA) | DATA_UNPROMOTED)
 }
 
 pub fn promote_with_vec(mut vec: Vec<u8>, ref_count: usize) -> *mut Shared {

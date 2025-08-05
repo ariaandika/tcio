@@ -159,7 +159,7 @@ impl BytesMut {
     /// Clears the `BytesMut`, removing all bytes.
     #[inline]
     pub const fn clear(&mut self) {
-        unsafe { self.set_len(0) };
+        self.len = 0;
     }
 
     /// Returns the bytes as a shared slice.
