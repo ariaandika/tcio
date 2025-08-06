@@ -257,8 +257,6 @@ impl BytesMut {
             return true;
         }
 
-        debug_assert!(self.cap - self.len < additional);
-
         let ptr = self.ptr.as_ptr();
         let len = self.len;
 
