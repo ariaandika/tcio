@@ -619,14 +619,16 @@ mod shared_vtable {
                 Err(shared) => {
                     let buf_ptr = shared.as_ptr();
                     let offset = ptr.offset_from(buf_ptr) as usize;
-
                     let cap = shared.capacity();
-                    let vec = match shared::release_into_vec(shared, cap) {
-                        Some(vec) => vec,
-                        None => slice::from_raw_parts(buf_ptr, offset + len).to_vec(),
-                    };
 
-                    (offset, vec)
+                    match shared::release_into_vec(shared, cap) {
+                        Some(vec) => (offset, vec),
+                        None => {
+                            // skip handling the `advance` below if we can directly copy
+                            // the correct range
+                            return slice::from_raw_parts(ptr, len).to_vec()
+                        },
+                    }
                 }
             };
 
