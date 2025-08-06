@@ -208,6 +208,13 @@ impl Bytes {
         let _ = unsafe { &*ptr };
     }
 
+    #[cfg(test)]
+    #[doc(hidden)]
+    pub(super) fn assert_unpromoted(&self) {
+        let ptr = self.data.load(Ordering::Acquire).cast::<shared::Shared>();
+        assert!(shared::is_unpromoted(ptr));
+    }
+
     #[inline]
     const unsafe fn advance_unchecked(&mut self, count: usize) {
         debug_assert!(count <= self.len, "Bytes::advance_unchecked out of bounds");
@@ -548,7 +555,7 @@ mod shared_vtable {
 
                 // `unpromoted` means there is only one handle,
                 // that means its impossible to have concurent promotion
-                data.store(new_shared.cast(), Ordering::Release);
+                data.store(new_shared.cast(), Ordering::Relaxed);
                 assert!(shared::is_promoted(new_shared.cast()));
                 Bytes {
                     ptr,
@@ -603,19 +610,22 @@ mod shared_vtable {
                     vec
                 }
                 Err(shared) => {
-                    let offset = ptr.offset_from(shared.as_ptr()) as usize;
+                    let buf_ptr = shared.as_ptr();
+                    let offset = ptr.offset_from(buf_ptr) as usize;
 
-                    match shared::release_into_vec(shared, len + offset) {
-                        Some(mut vec) => {
-                            if offset != 0 {
-                                // `Bytes` has been `advanced`, `Vec` cannot represent that,
-                                // so we can only copy the buffer backwards
-                                ptr::copy(ptr, vec.as_mut_ptr(), len);
-                            }
-                            vec
-                        }
-                        None => slice::from_raw_parts(ptr, len).to_vec(),
+                    let mut vec = match shared::release_into_vec(shared, len + offset) {
+                        Some(vec) => vec,
+                        None => slice::from_raw_parts(buf_ptr, len + offset).to_vec(),
+                    };
+
+                    // TODO: add copy_nonoverlapping
+                    if offset != 0 {
+                        // `Bytes` has been `advanced`, `Vec` cannot represent that,
+                        // so we can only copy the buffer backwards
+                        ptr::copy(ptr, vec.as_mut_ptr(), len);
                     }
+                    vec.set_len(len);
+                    vec
                 }
             }
         }
