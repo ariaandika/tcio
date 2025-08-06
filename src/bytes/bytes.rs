@@ -45,6 +45,12 @@ impl Bytes {
         }
     }
 
+    /// Create new [`Bytes`] by copying given bytes.
+    #[inline]
+    pub fn copy_from_slice(data: &[u8]) -> Self {
+        Self::from_vec(data.to_vec())
+    }
+
     pub(crate) fn from_vec(mut vec: Vec<u8>) -> Self {
         let ptr = vec.as_mut_ptr();
         let len = vec.len();
@@ -108,12 +114,6 @@ impl Bytes {
         }
     }
 
-    /// Create new [`Bytes`] by copying given bytes.
-    #[inline]
-    pub fn copy_from_slice(data: &[u8]) -> Self {
-        Self::from_vec(data.to_vec())
-    }
-
     /// Returns the number of bytes in the `Bytes`.
     #[inline]
     pub const fn len(&self) -> usize {
@@ -162,6 +162,13 @@ impl Bytes {
         unsafe { slice::from_raw_parts(self.ptr, self.len) }
     }
 
+    /// Returns a raw pointer to the buffer, or a dangling raw pointer valid for zero sized reads
+    /// if the buffer didn't allocate.
+    #[inline]
+    pub const fn as_ptr(&self) -> *const u8 {
+        self.ptr
+    }
+
     /// Converts a [`Bytes`] into a byte vector.
     ///
     /// If [`Bytes::is_unique`] returns `true`, the buffer is consumed and returned.
@@ -188,11 +195,11 @@ impl Bytes {
 
     /// Try to convert [`Bytes`] into [`BytesMut`] if its unique.
     #[inline]
-    pub fn try_into_mut(self) -> Result<BytesMut, Self> {
+    pub fn try_into_mut(mut self) -> Result<BytesMut, Self> {
         if self.is_unique() {
-            let mut mem = ManuallyDrop::new(self);
-            let me = &mut *mem;
-            Ok(unsafe { (me.vtable.into_mut)(&mut me.data, me.ptr, me.len) })
+            let bufm = unsafe { (self.vtable.into_mut)(&mut self.data, self.ptr, self.len) };
+            let _mem = ManuallyDrop::new(self);
+            Ok(bufm)
         } else {
             Err(self)
         }
@@ -242,6 +249,11 @@ impl Bytes {
 impl Bytes {
     // ===== Read =====
 
+    /// Returns the shared subset of `Bytes` with given range.
+    ///
+    /// # Panics
+    ///
+    /// `range` should be in bounds of bytes capacity, otherwise panic.
     pub fn slice(&self, range: impl std::ops::RangeBounds<usize>) -> Self {
         use core::ops::Bound;
 
@@ -272,14 +284,19 @@ impl Bytes {
             return Bytes::new_empty_with_ptr(self.ptr.wrapping_add(begin));
         }
 
-        let mut ret = self.clone();
+        let mut cloned = self.clone();
 
-        ret.len = end - begin;
-        ret.ptr = unsafe { ret.ptr.add(begin) };
+        cloned.len = end - begin;
+        cloned.ptr = unsafe { cloned.ptr.add(begin) };
 
-        ret
+        cloned
     }
 
+    /// Returns the shared subset of `Bytes` with given slice.
+    ///
+    /// # Panics
+    ///
+    /// `subset` should be in bytes content, otherwise panic.
     pub fn slice_ref(&self, subset: &[u8]) -> Self {
         // Empty slice and empty Bytes may have their pointers reset
         // so explicitly allow empty slice to be a subslice of any slice.
@@ -313,6 +330,12 @@ impl Bytes {
         self.slice(sub_offset..(sub_offset + sub_len))
     }
 
+    /// Splits `Bytes` into two at the given index.
+    ///
+    /// Afterwards `self` contains elements `[0, at)`, and the returned `Bytes` contains
+    /// elements `[at, capacity)`.
+    ///
+    /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
     pub fn split_off(&mut self, at: usize) -> Self {
         if at == self.len() {
             return Bytes::new_empty_with_ptr(self.ptr.wrapping_add(at));
@@ -338,6 +361,12 @@ impl Bytes {
         clone
     }
 
+    /// Splits `Bytes` into two at the given index.
+    ///
+    /// Afterwards `self` contains elements `[at, len)`, and the returned `Bytes` contains
+    /// elements `[0, at)`.
+    ///
+    /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
     pub fn split_to(&mut self, at: usize) -> Self {
         if at == self.len() {
             let end_ptr = self.ptr.wrapping_add(at);
@@ -364,12 +393,6 @@ impl Bytes {
     }
 }
 
-impl std::fmt::Debug for Bytes {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        crate::fmt::lossy(&self.as_slice()).fmt(f)
-    }
-}
-
 crate::macros::impl_std_traits! {
     impl Bytes;
 
@@ -379,6 +402,10 @@ crate::macros::impl_std_traits! {
 
     fn clone(&self) {
         unsafe { (self.vtable.clone)(&self.data, self.ptr, self.len) }
+    }
+
+    fn fmt(&self: Bytes, f) {
+        crate::fmt::lossy(&self.as_slice()).fmt(f)
     }
 
     fn default() { Self::new() }

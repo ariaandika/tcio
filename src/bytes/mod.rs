@@ -8,7 +8,6 @@
 //! - [`ByteStr`] is a `Bytes` that contains valid UTF-8.
 //! - [`BytesMut`] is a splitable in memory buffer.
 //! - [`Cursor`] track a position in a memory buffer.
-#![allow(missing_docs, reason = "wip")]
 mod shared;
 
 mod buf;

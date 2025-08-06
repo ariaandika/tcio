@@ -104,16 +104,16 @@ impl BytesMut {
         BytesMut::from_vec(Vec::new())
     }
 
-    /// Create new [`BytesMut`] by copying given bytes.
-    #[inline]
-    pub fn copy_from_slice(slice: &[u8]) -> BytesMut {
-        BytesMut::from_vec(slice.to_vec())
-    }
-
     /// Create new empty [`BytesMut`] with at least specified capacity.
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
         BytesMut::from_vec(Vec::with_capacity(capacity))
+    }
+
+    /// Create new [`BytesMut`] by copying given bytes.
+    #[inline]
+    pub fn copy_from_slice(slice: &[u8]) -> BytesMut {
+        BytesMut::from_vec(slice.to_vec())
     }
 
     pub(crate) const fn from_vec(mut vec: Vec<u8>) -> BytesMut {
@@ -150,7 +150,7 @@ impl BytesMut {
 
     /// Shortens the buffer, keeping the first `len` bytes and dropping the rest.
     #[inline]
-    pub fn truncate(&mut self, len: usize) {
+    pub const fn truncate(&mut self, len: usize) {
         if len < self.len {
             self.len = len;
         }
@@ -174,6 +174,20 @@ impl BytesMut {
         unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
     }
 
+    /// Returns a raw pointer to the buffer, or a dangling raw pointer valid for zero sized reads
+    /// if the buffer didn't allocate.
+    #[inline]
+    pub const fn as_ptr(&self) -> *const u8 {
+        unsafe { self.ptr.as_ref() }
+    }
+
+    /// Returns a raw mutable pointer to the buffer, or a dangling raw pointer valid for zero sized
+    /// reads if the buffer didn't allocate.
+    #[inline]
+    pub const fn as_mut_ptr(&mut self) -> *mut u8 {
+        self.ptr.as_ptr()
+    }
+
     /// Forces the length of the `BytesMut` to `new_len`.
     ///
     /// # Safety
@@ -190,9 +204,7 @@ impl BytesMut {
     #[inline]
     pub const fn spare_capacity_mut(&mut self) -> &mut [MaybeUninit<u8>] {
         unsafe {
-            let ptr = self.ptr.as_ptr().add(self.len).cast();
-            let remaining = self.cap - self.len;
-            slice::from_raw_parts_mut(ptr, remaining)
+            slice::from_raw_parts_mut(self.ptr.as_ptr().add(self.len).cast(), self.cap - self.len)
         }
     }
 
@@ -256,6 +268,8 @@ impl BytesMut {
         if additional == 0 {
             return true;
         }
+
+        assert!(additional + self.cap <= isize::MAX as _);
 
         let ptr = self.ptr.as_ptr();
         let len = self.len;
@@ -403,7 +417,7 @@ impl BytesMut {
         self.split_to(self.len)
     }
 
-    /// Splits the buffer into two at the given index.
+    /// Splits `BytesMut` into two at the given index.
     ///
     /// Afterwards `self` contains elements `[at, len)`, and the returned `BytesMut` contains
     /// elements `[0, at)`.
@@ -427,7 +441,7 @@ impl BytesMut {
         clone
     }
 
-    /// Splits the buffer into two at the given index.
+    /// Splits `BytesMut` into two at the given index.
     ///
     /// Afterwards `self` contains elements `[0, at)`, and the returned `BytesMut` contains
     /// elements `[at, capacity)`.
