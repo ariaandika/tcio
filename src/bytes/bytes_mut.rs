@@ -204,10 +204,7 @@ impl BytesMut {
     /// # Safety
     ///
     /// Ensure that nothing else uses the pointer after calling this function.
-    ///
-    /// Offset must be acquired from [`Handle`][super::shared2::Handle].
     unsafe fn original_buffer(&self, offset: usize) -> Vec<u8> {
-        // let offset = shared::payload(self.data);
         unsafe {
             Vec::from_raw_parts(
                 self.ptr.as_ptr().sub(offset),

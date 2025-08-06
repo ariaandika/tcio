@@ -50,11 +50,11 @@ impl Bytes {
         let len = vec.len();
         let cap = vec.capacity();
 
-        // `into_boxed_slice`, which call `shrink_to_fit` reallocate with
-        // condition `capacity > len`
+        // `into_boxed_slice`, which call `shrink_to_fit` will only reallocate
+        // if `capacity > len`
         //
-        // the freezed returns from `BytesMut::split` and `BytesMut::split_to`
-        // will trigger this branch
+        // new created vector, the freezed returns from `BytesMut::split`
+        // and `BytesMut::split_to` will trigger this branch
         if cap == len {
             return Self::from_box(vec.into_boxed_slice());
         }
@@ -163,6 +163,10 @@ impl Bytes {
     }
 
     /// Converts a [`Bytes`] into a byte vector.
+    ///
+    /// If [`Bytes::is_unique`] returns `true`, the buffer is consumed and returned.
+    ///
+    /// Otherwise, the buffer is copied to new allocation.
     #[inline]
     pub fn into_vec(self) -> Vec<u8> {
         let mut mem = ManuallyDrop::new(self);
