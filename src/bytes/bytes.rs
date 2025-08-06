@@ -611,7 +611,8 @@ mod shared_vtable {
                     let buf_ptr = map_ptr(buf_ptr.cast());
                     let offset = ptr.offset_from(buf_ptr) as usize;
 
-                    // unpromoted will not represent tail offset
+                    // unpromoted will not represent tail offset,
+                    // it will promoted beforehand
                     let vec = Vec::from_raw_parts(buf_ptr, len, offset + len);
 
                     (offset, vec)
@@ -655,28 +656,29 @@ mod shared_vtable {
         let shared = data.get_mut().cast();
 
         match shared::into_unpromoted_raw(shared) {
-            Ok(buffer) => unsafe {
-                // the only branch can contain unpromoted is from `Box<[u8]>`,
-                // which the same as full length vector
-                let buffer = map_ptr(buffer.cast());
-                let offset = ptr.offset_from(buffer) as usize;
+            Ok(buf_ptr) => unsafe {
+                let buf_ptr = map_ptr(buf_ptr.cast());
+                let offset = ptr.offset_from(buf_ptr) as usize;
 
-                let vec = Vec::from_raw_parts(buffer, offset + len, offset + len);
+                let vec = Vec::from_raw_parts(buf_ptr, offset + len, offset + len);
                 let mut bufm = BytesMut::from_vec(vec);
                 // in contrast with `Vec`, `BytesMut` can represent `advance`,
                 // so no copy required
                 bufm.advance_unchecked(offset);
+                bufm.set_len(len); // handle tail offset
                 bufm
             }
             Err(shared) => unsafe {
-                let offset = ptr.offset_from(shared.as_ptr()) as usize;
+                let buf_ptr = shared.as_ptr();
+                let offset = ptr.offset_from(buf_ptr) as usize;
+                let cap = shared.capacity();
 
-                match shared::release_into_vec(shared, len + offset) {
+                match shared::release_into_vec(shared, cap) {
                     Some(vec) => {
-                        let off = ptr.offset_from(vec.as_ptr()) as usize;
-                        let mut bytes = BytesMut::from_vec(vec);
-                        bytes.advance_unchecked(off);
-                        bytes
+                        let mut bufm = BytesMut::from_vec(vec);
+                        bufm.advance_unchecked(offset);
+                        bufm.set_len(len); // handle tail offset
+                        bufm
                     }
                     None => BytesMut::from_vec(slice::from_raw_parts(ptr, len).to_vec()),
                 }
