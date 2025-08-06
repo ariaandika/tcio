@@ -170,6 +170,18 @@ impl Bytes {
         unsafe { (me.vtable.into_vec)(&mut me.data, me.ptr, me.len) }
     }
 
+    /// Converts a [`Bytes`] into a [`BytesMut`].
+    ///
+    /// If [`Bytes::is_unique`] returns `true`, the buffer is consumed and returned.
+    ///
+    /// Otherwise, the buffer is copied to new allocation.
+    #[inline]
+    pub fn into_mut(self) -> BytesMut {
+        let mut mem = ManuallyDrop::new(self);
+        let me = &mut *mem;
+        unsafe { (me.vtable.into_mut)(&mut me.data, me.ptr, me.len) }
+    }
+
     /// Try to convert [`Bytes`] into [`BytesMut`] if its unique.
     #[inline]
     pub fn try_into_mut(self) -> Result<BytesMut, Self> {
@@ -594,40 +606,41 @@ mod shared_vtable {
         let shared = data.get_mut().cast();
 
         unsafe {
-            match shared::into_unpromoted_raw(shared) {
-                Ok(buffer) => {
-                    // the only branch can contain unpromoted is from `Box<[u8]>`,
-                    // which the same as full length vector
-                    let buffer = map_ptr(buffer.cast());
-                    let offset = ptr.offset_from(buffer) as usize;
+            let (offset, mut vec) = match shared::into_unpromoted_raw(shared) {
+                Ok(buf_ptr) => {
+                    let buf_ptr = map_ptr(buf_ptr.cast());
+                    let offset = ptr.offset_from(buf_ptr) as usize;
 
-                    let mut vec = Vec::from_raw_parts(buffer, len, offset + len);
-                    if offset != 0 {
-                        // `Bytes` has been `advanced`, `Vec` cannot represent that,
-                        // so we can only copy the buffer backwards
-                        ptr::copy(ptr, vec.as_mut_ptr(), len);
-                    }
-                    vec
+                    // unpromoted will not represent tail offset
+                    let vec = Vec::from_raw_parts(buf_ptr, len, offset + len);
+
+                    (offset, vec)
                 }
                 Err(shared) => {
                     let buf_ptr = shared.as_ptr();
                     let offset = ptr.offset_from(buf_ptr) as usize;
 
-                    let mut vec = match shared::release_into_vec(shared, len + offset) {
+                    let cap = shared.capacity();
+                    let vec = match shared::release_into_vec(shared, cap) {
                         Some(vec) => vec,
-                        None => slice::from_raw_parts(buf_ptr, len + offset).to_vec(),
+                        None => slice::from_raw_parts(buf_ptr, offset + len).to_vec(),
                     };
 
-                    // TODO: add copy_nonoverlapping
-                    if offset != 0 {
-                        // `Bytes` has been `advanced`, `Vec` cannot represent that,
-                        // so we can only copy the buffer backwards
-                        ptr::copy(ptr, vec.as_mut_ptr(), len);
-                    }
-                    vec.set_len(len);
-                    vec
+                    (offset, vec)
+                }
+            };
+
+            if offset != 0 {
+                // `Bytes` has been `advanced`, `Vec` cannot represent that,
+                // so we can only copy the buffer backwards
+                if offset >= len {
+                    ptr::copy_nonoverlapping(ptr, vec.as_mut_ptr(), len);
+                } else {
+                    ptr::copy(ptr, vec.as_mut_ptr(), len);
                 }
             }
+            vec.set_len(len);
+            vec
         }
     }
 
