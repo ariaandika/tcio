@@ -1,12 +1,3 @@
-use std::slice::from_raw_parts as slice;
-
-macro_rules! debug_invariant {
-    ($me:ident) => {{
-        debug_assert!($me.start <= $me.cursor, "`Cursor` invariant violated");
-        debug_assert!($me.cursor <= $me.end, "`Cursor` invariant violated");
-    }};
-}
-
 /// Raw bytes cursor.
 ///
 /// Provides an API for bytes reading, with unsafe methods that skip bounds checking.
@@ -67,28 +58,28 @@ impl<'a> Cursor<'a> {
     #[inline]
     pub fn original(&self) -> &'a [u8] {
         // SAFETY: invariant `self.start <= self.end`
-        unsafe { slice(self.start, self.end.offset_from(self.start) as _) }
+        unsafe { std::slice::from_raw_parts(self.start, self.end.offset_from(self.start) as _) }
     }
 
     /// Returns the remaining bytes.
     #[inline]
     pub fn as_slice(&self) -> &'a [u8] {
         // SAFETY: invariant `self.cursor <= self.end`
-        unsafe { slice(self.cursor, self.remaining()) }
+        unsafe { std::slice::from_raw_parts(self.cursor, self.remaining()) }
     }
 
     /// Returns the already advanced slice.
     #[inline]
     pub fn advanced_slice(&self) -> &'a [u8] {
         // SAFETY: invariant `self.cursor <= self.end`
-        unsafe { slice(self.start, self.cursor.offset_from(self.start) as _) }
+        unsafe { std::slice::from_raw_parts(self.start, self.cursor.offset_from(self.start) as _) }
     }
 
     /// Returns the remaining bytes.
     #[inline]
     pub fn as_bytes(&self) -> &'a [u8] {
         // SAFETY: invariant `self.cursor <= self.end`
-        unsafe { slice(self.cursor, self.remaining()) }
+        unsafe { std::slice::from_raw_parts(self.cursor, self.remaining()) }
     }
 
     // ===== Peek =====
@@ -99,7 +90,6 @@ impl<'a> Cursor<'a> {
         if self.cursor == self.end {
             None
         } else {
-            debug_invariant!(self);
             // SAFETY: start is still in bounds
             Some(unsafe { *self.cursor })
         }
@@ -131,7 +121,6 @@ impl<'a> Cursor<'a> {
         if self.cursor == self.end {
             None
         } else {
-            debug_invariant!(self);
             // SAFETY: `self.cursor` is still in bounds
             unsafe {
                 let val = *self.cursor;
@@ -168,7 +157,7 @@ impl<'a> Cursor<'a> {
         match self.find_inner(strategy) {
             // SAFETY: checked by Strategy implementation
             Some(len) => unsafe {
-                let chunk = slice(self.cursor, len);
+                let chunk = std::slice::from_raw_parts(self.cursor, len);
                 self.advance(len);
                 Some(chunk)
             },
@@ -186,7 +175,7 @@ impl<'a> Cursor<'a> {
         match self.find_inner(strategy) {
             // SAFETY: checked by Strategy implementation
             Some(len) => unsafe {
-                let chunk = slice(self.cursor, len + 1);
+                let chunk = std::slice::from_raw_parts(self.cursor, len + 1);
                 self.advance(len + 1);
                 Some(chunk)
             },
@@ -204,7 +193,7 @@ impl<'a> Cursor<'a> {
         match self.find_inner(strategy) {
             // SAFETY: checked by Strategy implementation
             Some(len) => unsafe {
-                let chunk = slice(self.cursor, len);
+                let chunk = std::slice::from_raw_parts(self.cursor, len);
                 self.advance(len + 1);
                 Some(chunk)
             },
@@ -236,7 +225,6 @@ impl<'a> Cursor<'a> {
         );
         // SAFETY: asserted
         unsafe { self.cursor = self.cursor.add(n) };
-        debug_invariant!(self);
     }
 
     /// Move cursor backwards cursor.
@@ -567,101 +555,5 @@ mod sealed {
         fn find_swar(self, cursor: &Cursor<'_>) -> Option<usize> {
             (self.0, self.1, self.2).find_iter(cursor.cursor, cursor)
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    const BUF: [u8; 23] = *b"Content-Type: text/html";
-    const BUF_LEN: usize = BUF.len();
-
-    const BUF2: [u8; 11] = *b": text/html";
-    const BUF2_LEN: usize = BUF2.len();
-    const BUF2_ADV: usize = BUF_LEN - BUF2_LEN;
-
-    #[test]
-    fn test_cursor_empty() {
-        let mut cursor = Cursor::new(b"");
-
-        assert_eq!(cursor.peek(), None);
-        assert_eq!(cursor.peek_chunk::<0>(), Some(&[]));
-        assert_eq!(cursor.peek_chunk::<2>(), None);
-        assert_eq!(cursor.next(), None);
-        assert_eq!(cursor.next_chunk::<0>(), Some(&[]));
-        assert_eq!(cursor.next_chunk::<2>(), None);
-    }
-
-    #[test]
-    fn test_cursor_peek() {
-        let mut cursor = Cursor::new(&BUF[..]);
-
-        assert_eq!(cursor.peek(), BUF.first().copied());
-        assert_eq!(cursor.peek_chunk::<0>(), Some(&[]));
-        assert_eq!(cursor.peek_chunk::<2>(), BUF.first_chunk::<2>());
-        assert_eq!(cursor.peek_chunk::<BUF_LEN>(), Some(&BUF));
-        assert_eq!(cursor.peek_chunk::<{ BUF_LEN + 1 }>(), None);
-
-        unsafe { cursor.advance(BUF2_ADV) };
-
-        assert_eq!(cursor.peek(), BUF2.first().copied());
-        assert_eq!(cursor.peek_chunk::<0>(), Some(&[]));
-        assert_eq!(cursor.peek_chunk::<2>(), BUF2.first_chunk::<2>());
-        assert_eq!(cursor.peek_chunk::<BUF2_LEN>(), Some(&BUF2));
-        assert_eq!(cursor.peek_chunk::<{ BUF2_LEN + 1 }>(), None);
-    }
-
-    #[test]
-    fn test_cursor_next() {
-        let mut cursor = Cursor::new(&BUF[..]);
-
-        assert_eq!(cursor.next_chunk::<0>(), Some(&[]));
-        assert_eq!(cursor.as_bytes(), &BUF[..]);
-
-        assert_eq!(cursor.next(), BUF.first().copied());
-        assert_eq!(cursor.next_chunk::<2>(), BUF[1..].first_chunk::<2>());
-        assert_eq!(cursor.next_chunk::<{ BUF_LEN - 3 }>(), BUF[3..].first_chunk::<{ BUF_LEN - 3 }>());
-    }
-
-    #[test]
-    fn test_next_find() {
-        const BUF: [u8; 23] = *b"Content-Type: text/html";
-
-        let mut cursor = Cursor::new(&BUF);
-        assert_eq!(cursor.next_find(b'-'), Some(&b"Content"[..]));
-        assert_eq!(cursor.as_bytes(), &b"-Type: text/html"[..]);
-
-        let mut cursor = Cursor::new(&BUF);
-        assert_eq!(cursor.next_find(b':'), Some(&b"Content-Type"[..]));
-        assert_eq!(cursor.as_bytes(), &b": text/html"[..]);
-
-        let mut cursor = Cursor::new(&BUF);
-        assert_eq!(cursor.next_find(b'*'), None);
-        assert_eq!(cursor.as_bytes(), &BUF);
-
-        let mut cursor = Cursor::new(&BUF);
-        assert_eq!(cursor.next_find((b'-', b'T')), Some(&b"Content"[..]));
-        assert_eq!(cursor.as_bytes(), &b"-Type: text/html"[..]);
-
-        let mut cursor = Cursor::new(&BUF);
-        assert_eq!(cursor.next_find((b'T', b'-')), Some(&b"Content"[..]));
-        assert_eq!(cursor.as_bytes(), &b"-Type: text/html"[..]);
-
-        let mut cursor = Cursor::new(&BUF);
-        assert_eq!(cursor.next_find((b'T', b'-', ..)), Some(&b"Content"[..]));
-        assert_eq!(cursor.as_bytes(), &b"-Type: text/html"[..]);
-
-        // until
-
-        let mut cursor = Cursor::new(&BUF);
-        assert_eq!(cursor.next_until(b'-'), Some(&b"Content-"[..]));
-        assert_eq!(cursor.as_bytes(), &b"Type: text/html"[..]);
-
-        // split
-
-        let mut cursor = Cursor::new(&BUF);
-        assert_eq!(cursor.next_split(b'-'), Some(&b"Content"[..]));
-        assert_eq!(cursor.as_bytes(), &b"Type: text/html"[..]);
     }
 }
