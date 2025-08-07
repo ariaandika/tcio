@@ -97,3 +97,14 @@ fn test_bytes_mut_promoted_allocation() {
     assert_eq!(buf.spare_capacity_mut().len(), cap);
     assert_eq!(buf.as_ptr(), ptr);
 }
+
+// Unsplit
+
+#[test]
+fn test_bytes_mut_unsplit() {
+    let mut bytes = BytesMut::copy_from_slice(DATA);
+
+    let other = bytes.split_off(6);
+
+    bytes.try_unsplit(other).unwrap();
+}

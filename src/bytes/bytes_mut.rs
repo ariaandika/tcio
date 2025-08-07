@@ -526,6 +526,48 @@ impl BytesMut {
             self.len += additional;
         }
     }
+
+    /// Absorbs a `BytesMut` that was previously split off.
+    ///
+    /// If the two `BytesMut` were previously contiguous, this is an `O(1)` operation that just
+    /// decrease a reference count and sets few indices.
+    ///
+    /// Otherwise, it copies and append the bytes to the current `BytesMut`.
+    pub fn unsplit(&mut self, other: BytesMut) {
+        if self.is_empty() {
+            *self = other;
+            return;
+        }
+
+        if let Err(other) = self.try_unsplit(other) {
+            self.extend_from_slice(&other);
+        }
+    }
+
+    /// Absorbs a `BytesMut` that was previously split off.
+    ///
+    /// If the two `BytesMut` were previously contiguous, this is an `O(1)` operation that just
+    /// decrease a reference count, sets few indices and returns [`Ok`].
+    ///
+    /// Otherwise, it returns [`Err`] containing the same given `BytesMut`.
+    pub fn try_unsplit(&mut self, other: BytesMut) -> Result<(), BytesMut> {
+        if other.capacity() == 0 {
+            return Ok(());
+        }
+
+        let ptr = unsafe { self.ptr.as_ptr().add(self.len) };
+
+        if ptr == other.ptr.as_ptr()
+            && shared::is_promoted(self.data)
+            && shared::is_promoted(other.data)
+        {
+            self.len += other.len;
+            self.cap += other.cap;
+            Ok(())
+        } else {
+            Err(other)
+        }
+    }
 }
 
 crate::macros::impl_std_traits! {
