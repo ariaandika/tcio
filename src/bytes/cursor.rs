@@ -126,7 +126,7 @@ impl<'a> Cursor<'a> {
     )]
     pub fn next(&mut self) -> Option<u8> {
         // no impl Iterator, though this IS an Iterator, but all the method is optimized for bytes,
-        // so callers can be mistaken to call the blanket method from Iterator trait
+        // so callers could be mistaken to call the blanket method from Iterator trait
 
         if self.cursor == self.end {
             None
@@ -241,19 +241,19 @@ impl<'a> Cursor<'a> {
 
     /// Move cursor backwards cursor.
     ///
-    /// # Safety
+    /// # Panics
     ///
-    /// Must not step back pass the first slice element.
+    /// Panic if step back pass the first byte.
     #[inline]
-    pub unsafe fn step_back(&mut self, n: usize) {
-        debug_assert!(
-            // SAFETY: invariant `self.start <= self.cursor`
-            unsafe { self.cursor.offset_from(self.start) } as usize >= n,
-            "`Cursor::step_back` safety violated, stepping back `n` is out of bounds"
-        );
-        // SAFETY: asserted
-        unsafe { self.cursor = self.cursor.sub(n) };
-        debug_invariant!(self);
+    pub fn step_back(&mut self, n: usize) {
+        unsafe {
+            assert!(
+                // SAFETY: invariant `self.start <= self.cursor`
+                self.cursor.offset_from(self.start) as usize >= n,
+                "`Cursor::step_back` out of bounds"
+            );
+            self.cursor = self.cursor.sub(n);
+        }
     }
 
     // ===== Forking =====
