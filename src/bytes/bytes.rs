@@ -423,6 +423,8 @@ crate::macros::impl_std_traits! {
     fn eq(&self, &other: &str) { <[u8]>::eq(self, other.as_bytes()) }
     fn eq(&self, &other: Vec<u8>) { <[u8]>::eq(self, other.as_slice()) }
     fn eq(&self, &other: &Vec<u8>) { <[u8]>::eq(self, other.as_slice()) }
+    fn eq(&self, &other: Bytes) { <[u8]>::eq(self, &**other) }
+    fn eq(&self, &other: BytesMut) { <[u8]>::eq(self, &**other) }
 }
 
 crate::macros::impl_std_traits! {

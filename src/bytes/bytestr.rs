@@ -198,14 +198,6 @@ impl From<ByteStr> for Bytes {
     }
 }
 
-// TODO: wait for Bytes::into_mut()
-// impl From<ByteStr> for BytesMut {
-//     #[inline]
-//     fn from(value: ByteStr) -> Self {
-//         value.bytes.into()
-//     }
-// }
-
 impl From<ByteStr> for String {
     #[inline]
     fn from(value: ByteStr) -> Self {
@@ -229,54 +221,22 @@ impl AsRef<str> for ByteStr {
     }
 }
 
-impl std::ops::Deref for ByteStr {
-    type Target = str;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        self.as_str()
-    }
-}
-
-// ===== Others =====
-
 impl std::fmt::Display for ByteStr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self.as_str(), f)
     }
 }
 
-impl std::fmt::Debug for ByteStr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(self.as_str(), f)
-    }
-}
+crate::macros::impl_std_traits! {
+    impl ByteStr;
 
-impl PartialEq for ByteStr {
-    #[inline]
-    fn eq(&self, other: &Self) -> bool {
-        str::eq(self.as_str(), other.as_str())
-    }
-}
+    fn deref(&self) -> &str { self.as_str() }
 
-impl PartialEq<str> for ByteStr {
-    #[inline]
-    fn eq(&self, other: &str) -> bool {
-        str::eq(self, other)
-    }
-}
+    fn fmt(&self: ByteStr, f) { str::fmt(self, f) }
 
-impl PartialEq<&str> for ByteStr {
-    #[inline]
-    fn eq(&self, other: &&str) -> bool {
-        str::eq(self, *other)
-    }
-}
-
-impl PartialEq<String> for ByteStr {
-    #[inline]
-    fn eq(&self, other: &String) -> bool {
-        str::eq(self, other)
-    }
+    fn eq(&self, &other: str) { str::eq(self, other) }
+    fn eq(&self, &other: &str) { str::eq(self, *other) }
+    fn eq(&self, &other: String) { str::eq(self, other) }
+    fn eq(&self, &other: ByteStr) { str::eq(self, other.as_str()) }
 }
 
