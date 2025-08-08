@@ -24,5 +24,10 @@ pub use bytes_mut::BytesMut;
 pub use bytestr::ByteStr;
 pub use cursor::Cursor;
 
+pub mod error {
+    //! Errors type.
+    pub use super::bytestr::FromUtf8Error;
+}
+
 #[cfg(test)]
 mod test;

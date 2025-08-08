@@ -224,7 +224,7 @@ impl AsRef<str> for ByteStr {
 }
 
 impl std::fmt::Display for ByteStr {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         std::fmt::Display::fmt(self.as_str(), f)
     }
 }
@@ -244,22 +244,26 @@ crate::macros::impl_std_traits! {
 
 // ===== Error =====
 
+/// A possible error value when converting a `String` from a UTF-8 byte vector.
 pub struct FromUtf8Error {
     bytes: Bytes,
     error: std::str::Utf8Error,
 }
 
 impl FromUtf8Error {
+    /// Fetch a `Utf8Error` to get more details about the conversion failure.
     #[inline]
     pub const fn utf8_error(&self) -> &std::str::Utf8Error {
         &self.error
     }
 
+    /// Returns a slice of [`u8`]s bytes that were attempted to convert to a `ByteStr`.
     #[inline]
     pub const fn as_bytes(&self) -> &[u8] {
         self.bytes.as_slice()
     }
 
+    /// Returns the bytes that were attempted to convert to a `ByteStr`.
     #[inline]
     pub fn into_bytes(self) -> Bytes {
         self.bytes
