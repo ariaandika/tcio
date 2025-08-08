@@ -107,8 +107,19 @@ impl<'a> Cursor<'a> {
     #[inline]
     pub const fn peek_prev(&self) -> Option<u8> {
         if self.steps() > 0 {
-            // SAFETY: start is still in bounds
-            Some(unsafe { *self.cursor })
+            // SAFETY: already advance once
+            Some(unsafe { *self.cursor.sub(1) })
+        } else {
+            None
+        }
+    }
+
+    /// Try get the previous `N`-th bytes without stepping back cursor.
+    #[inline]
+    pub const fn peek_prev_chunk<const N: usize>(&self) -> Option<&'a [u8; N]> {
+        if self.steps() >= N {
+            // SAFETY: already advanced `N`-th
+            Some(unsafe { &*self.cursor.sub(N).cast() })
         } else {
             None
         }
@@ -148,6 +159,33 @@ impl<'a> Cursor<'a> {
                 self.advance(N);
                 Some(val)
             }
+        } else {
+            None
+        }
+    }
+
+    // ===== Prev =====
+
+    /// Try get the previous byte and step back the cursor by `1`.
+    #[inline]
+    pub const fn prev(&mut self) -> Option<u8> {
+        if self.steps() > 0 {
+            // SAFETY: already advance once
+            let val = unsafe { *self.cursor.sub(1) };
+            self.step_back(1);
+            Some(val)
+        } else {
+            None
+        }
+    }
+
+    /// Try get the previous `N`-th bytes and step back cursor by `N`.
+    #[inline]
+    pub const fn prev_chunk<const N: usize>(&mut self) -> Option<&'a [u8; N]> {
+        if self.steps() >= N {
+            self.step_back(N);
+            // SAFETY: already advanced `N`
+            Some(unsafe { &*self.cursor.cast() })
         } else {
             None
         }
