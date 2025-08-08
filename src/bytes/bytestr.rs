@@ -25,9 +25,11 @@ impl ByteStr {
     /// Returns `Err` if the slice is not UTF-8 with a description as to why the provided slice is
     /// not UTF-8.
     #[inline]
-    pub fn from_utf8(bytes: Bytes) -> Result<Self, std::str::Utf8Error> {
-        str::from_utf8(&bytes)?;
-        Ok(Self { bytes })
+    pub const fn from_utf8(bytes: Bytes) -> Result<Self, FromUtf8Error> {
+        match str::from_utf8(bytes.as_slice()) {
+            Ok(_) => Ok(Self { bytes }),
+            Err(error) => Err(FromUtf8Error { error, bytes }),
+        }
     }
 
     /// Create [`ByteStr`] from a slice of `str` that is equivalent to the given `bytes`.
@@ -48,7 +50,7 @@ impl ByteStr {
     ///
     /// The bytes passed in must be valid UTF-8.
     #[inline]
-    pub unsafe fn from_utf8_unchecked(bytes: Bytes) -> Self {
+    pub const unsafe fn from_utf8_unchecked(bytes: Bytes) -> Self {
         Self { bytes }
     }
 
@@ -112,9 +114,9 @@ impl ByteStr {
 
     /// Extracts a string slice containing the entire `ByteStr`.
     #[inline]
-    pub fn as_str(&self) -> &str {
+    pub const fn as_str(&self) -> &str {
         // SAFETY: invariant bytes is a valid utf8
-        unsafe { str::from_utf8_unchecked(&self.bytes) }
+        unsafe { str::from_utf8_unchecked(self.bytes.as_slice()) }
     }
 
     /// Returns a slice str of self that is equivalent to the given `subset`.
@@ -238,5 +240,43 @@ crate::macros::impl_std_traits! {
     fn eq(&self, &other: &str) { str::eq(self, *other) }
     fn eq(&self, &other: String) { str::eq(self, other) }
     fn eq(&self, &other: ByteStr) { str::eq(self, other.as_str()) }
+}
+
+// ===== Error =====
+
+pub struct FromUtf8Error {
+    bytes: Bytes,
+    error: std::str::Utf8Error,
+}
+
+impl FromUtf8Error {
+    #[inline]
+    pub const fn utf8_error(&self) -> &std::str::Utf8Error {
+        &self.error
+    }
+
+    #[inline]
+    pub const fn as_bytes(&self) -> &[u8] {
+        self.bytes.as_slice()
+    }
+
+    #[inline]
+    pub fn into_bytes(self) -> Bytes {
+        self.bytes
+    }
+}
+
+impl std::error::Error for FromUtf8Error { }
+
+impl std::fmt::Debug for FromUtf8Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
+}
+
+impl std::fmt::Display for FromUtf8Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.error.fmt(f)
+    }
 }
 
