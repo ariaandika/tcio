@@ -29,7 +29,7 @@ fn test_cursor_peek() {
     assert_eq!(cursor.peek_chunk::<BUF_LEN>(), Some(&BUF));
     assert_eq!(cursor.peek_chunk::<{ BUF_LEN + 1 }>(), None);
 
-    unsafe { cursor.advance(BUF2_ADV) };
+    cursor.advance(BUF2_ADV);
 
     assert_eq!(cursor.peek(), BUF2.first().copied());
     assert_eq!(cursor.peek_chunk::<0>(), Some(&[]));
@@ -43,7 +43,7 @@ fn test_cursor_next() {
     let mut cursor = Cursor::new(&BUF[..]);
 
     assert_eq!(cursor.next_chunk::<0>(), Some(&[]));
-    assert_eq!(cursor.as_bytes(), &BUF[..]);
+    assert_eq!(cursor.as_slice(), &BUF[..]);
 
     assert_eq!(cursor.next(), BUF.first().copied());
     assert_eq!(cursor.next_chunk::<2>(), BUF[1..].first_chunk::<2>());
