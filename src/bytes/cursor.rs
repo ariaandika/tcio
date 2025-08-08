@@ -82,6 +82,12 @@ impl<'a> Cursor<'a> {
         unsafe { std::slice::from_raw_parts(self.cursor, self.remaining()) }
     }
 
+    /// Returns the pointer this cursor point to.
+    #[inline]
+    pub const fn as_ptr(&self) -> *const u8 {
+        self.cursor
+    }
+
     // ===== Peek =====
 
     /// Try get the first byte without advancing cursor.
