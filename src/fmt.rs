@@ -35,6 +35,10 @@ impl std::fmt::Display for LossyFmt<'_> {
         for &b in self.0 {
             if b.is_ascii_graphic() || b.is_ascii_whitespace() {
                 write!(f, "{}", b as char)?;
+            } else if b == b'\n' {
+                write!(f, "\\n")?;
+            } else if b == b'\r' {
+                write!(f, "\\r")?;
             } else {
                 write!(f, "\\x{b:x}")?;
             }
