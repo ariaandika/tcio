@@ -721,17 +721,20 @@ mod shared_vtable {
 
     unsafe fn drop(
         data: &mut AtomicPtr<()>,
-        _: *const u8,
+        ptr: *const u8,
         len: usize,
-        map_ptr: impl Fn(*mut u8) -> *mut u8,
+        map_ptr: fn(*mut u8) -> *mut u8,
     ) {
         let shared = data.get_mut().cast();
 
         match shared::into_unpromoted_raw(shared) {
-            Ok(buffer) => {
-                // the only branch can contain unpromoted is from `Box<[u8]>`,
-                // which the same as full length vector
-                let _ = unsafe { Vec::<u8>::from_raw_parts(map_ptr(buffer.cast()), len, len) };
+            Ok(buf_ptr) => {
+                let buf_ptr = map_ptr(buf_ptr.cast());
+                let advanced = unsafe { ptr.offset_from(buf_ptr) } as usize;
+
+                // unpromoted will not represent tail offset, it will be promoted beforehand,
+                // thus it is the same as full length vector
+                let _ = unsafe { Vec::from_raw_parts(buf_ptr, 0, advanced + len) };
             }
             Err(shared) => {
                 shared::release(shared);
