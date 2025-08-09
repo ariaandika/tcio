@@ -102,13 +102,9 @@ impl Bytes {
 
     pub(crate) fn from_mut(shared: *mut shared::Shared, mut bytesm: BytesMut) -> Self {
         debug_assert!(shared::is_promoted(shared));
-
-        let ptr = bytesm.as_mut_ptr();
-        let len = bytesm.len();
-
         Bytes {
-            ptr,
-            len,
+            ptr: bytesm.as_mut_ptr(),
+            len: bytesm.len(),
             data: AtomicPtr::new(shared as _),
             vtable: Vtable::shared_promoted(),
         }
@@ -142,7 +138,6 @@ impl Bytes {
                 // this introduce "tail offset",
                 // which cannot be represented in unpromoted,
                 // thus required to be promoted
-
                 drop(self.split_off(len));
             } else {
                 self.len = len;
@@ -195,11 +190,9 @@ impl Bytes {
 
     /// Try to convert [`Bytes`] into [`BytesMut`] if its unique.
     #[inline]
-    pub fn try_into_mut(mut self) -> Result<BytesMut, Self> {
+    pub fn try_into_mut(self) -> Result<BytesMut, Self> {
         if self.is_unique() {
-            let bufm = unsafe { (self.vtable.into_mut)(&mut self.data, self.ptr, self.len) };
-            let _mem = ManuallyDrop::new(self);
-            Ok(bufm)
+            Ok(self.into_mut())
         } else {
             Err(self)
         }
@@ -224,20 +217,13 @@ impl Bytes {
     }
 
     #[cfg(test)]
-    #[doc(hidden)]
-    pub(super) fn assert_promoted(&self) {
-        let ptr = self.data.load(Ordering::Acquire).cast::<shared::Shared>();
-        assert!(shared::is_promoted(ptr));
-        let _ = unsafe { &*ptr };
+    pub(crate) fn data(&self) -> &AtomicPtr<()> {
+        &self.data
     }
 
-    #[cfg(test)]
-    #[doc(hidden)]
-    pub(super) fn assert_unpromoted(&self) {
-        let ptr = self.data.load(Ordering::Acquire).cast::<shared::Shared>();
-        assert!(shared::is_unpromoted(ptr));
-    }
-
+    /// # Safety
+    ///
+    /// `count <= self.len`
     #[inline]
     const unsafe fn advance_unchecked(&mut self, count: usize) {
         debug_assert!(count <= self.len, "Bytes::advance_unchecked out of bounds");
@@ -445,19 +431,20 @@ impl Buf for Bytes {
     #[inline]
     fn advance(&mut self, cnt: usize) {
         assert!(
-            cnt <= self.len(),
+            cnt <= self.len,
             "cannot advance past `remaining`: {:?} <= {:?}",
             cnt,
-            self.len(),
+            self.len,
         );
 
+        // SAFETY: cnt <= self.len
         unsafe {
             self.advance_unchecked(cnt);
         }
     }
 
     #[inline]
-    fn copy_to_bytes(&mut self, len: usize) -> super::Bytes {
+    fn copy_to_bytes(&mut self, len: usize) -> Bytes {
         self.split_to(len)
     }
 }
@@ -521,7 +508,7 @@ mod static_vtable {
 // ===== Shared Vtable =====
 
 mod shared_vtable {
-    use super::{*, shared::Shared};
+    use super::*;
 
     impl Vtable {
         pub(super) fn shared_unpromoted(data: *mut u8) -> (*mut u8, &'static Vtable) {
@@ -587,21 +574,21 @@ mod shared_vtable {
         data: &AtomicPtr<()>,
         ptr: *const u8,
         len: usize,
-        map_ptr: impl Fn(*mut u8) -> *mut u8,
+        map_ptr: fn(*mut u8) -> *mut u8,
     ) -> Bytes {
-        let shared = data.load(Ordering::Relaxed).cast::<Shared>();
+        let shared = data.load(Ordering::Relaxed).cast();
 
         match shared::as_unpromoted_raw(shared) {
             Ok(shared) => {
-                // the only branch can contain unpromoted is from `Box<[u8]>`,
-                // which the same as full length vector
+                // unpromoted will not represent tail offset, it will be promoted beforehand,
+                // thus it is the same as full length vector
                 let vec = unsafe { Vec::from_raw_parts(map_ptr(shared.cast()), len, len) };
                 let new_shared = shared::promote_with_vec(vec, 2);
 
                 // `unpromoted` means there is only one handle,
-                // that means its impossible to have concurent promotion
+                // thus its impossible to have concurent promotion
                 data.store(new_shared.cast(), Ordering::Relaxed);
-                assert!(shared::is_promoted(new_shared.cast()));
+                assert!(shared::is_promoted(new_shared));
                 Bytes {
                     ptr,
                     len,
@@ -622,7 +609,7 @@ mod shared_vtable {
     }
 
     unsafe fn is_unique(data: &AtomicPtr<()>) -> bool {
-        let shared = data.load(Ordering::Relaxed).cast::<Shared>();
+        let shared = data.load(Ordering::Relaxed).cast();
 
         match shared::as_unpromoted(shared) {
             Ok(_) => true,
@@ -634,86 +621,106 @@ mod shared_vtable {
         data: &mut AtomicPtr<()>,
         ptr: *const u8,
         len: usize,
-        map_ptr: impl Fn(*mut u8) -> *mut u8,
+        map_ptr: fn(*mut u8) -> *mut u8,
     ) -> Vec<u8> {
         let shared = data.get_mut().cast();
 
-        unsafe {
-            let (offset, mut vec) = match shared::into_unpromoted_raw(shared) {
-                Ok(buf_ptr) => {
-                    let buf_ptr = map_ptr(buf_ptr.cast());
-                    let offset = ptr.offset_from(buf_ptr) as usize;
+        let (advanced, mut vec) = match shared::into_unpromoted_raw(shared) {
+            Ok(buf_ptr) => {
+                let buf_ptr = map_ptr(buf_ptr.cast());
+                let advanced = unsafe { ptr.offset_from(buf_ptr) } as usize;
 
-                    // unpromoted will not represent tail offset,
-                    // it will promoted beforehand
-                    let vec = Vec::from_raw_parts(buf_ptr, len, offset + len);
+                // unpromoted will not represent tail offset, it will be promoted beforehand,
+                // thus it is the same as full length vector
+                let vec = unsafe { Vec::from_raw_parts(buf_ptr, len, advanced + len) };
 
-                    (offset, vec)
+                (advanced, vec)
+            }
+            Err(shared) => {
+                let buf_ptr = shared.as_ptr();
+                let advanced = unsafe { ptr.offset_from(buf_ptr) } as usize;
+                let cap = shared.capacity();
+
+                // the returned `Some(vec)` here can contains uninitialized bytes,
+                // but it is fixed below
+                match unsafe { shared::release_into_vec(shared, cap) } {
+                    Some(vec) => (advanced, vec),
+                    None => {
+                        // skip handling the `advance` below if we can directly copy
+                        // the correct range
+                        return unsafe { slice::from_raw_parts(ptr, len).to_vec() }
+                    },
                 }
-                Err(shared) => {
-                    let buf_ptr = shared.as_ptr();
-                    let offset = ptr.offset_from(buf_ptr) as usize;
-                    let cap = shared.capacity();
+            }
+        };
 
-                    match shared::release_into_vec(shared, cap) {
-                        Some(vec) => (offset, vec),
-                        None => {
-                            // skip handling the `advance` below if we can directly copy
-                            // the correct range
-                            return slice::from_raw_parts(ptr, len).to_vec()
-                        },
-                    }
-                }
-            };
-
-            if offset != 0 {
-                // `Bytes` has been `advanced`, `Vec` cannot represent that,
-                // so we can only copy the buffer backwards
-                if offset >= len {
+        if advanced != 0 {
+            // `Bytes` has been `advanced`, `Vec` cannot represent that,
+            // so we can only copy the buffer backwards
+            unsafe {
+                if advanced >= len {
                     ptr::copy_nonoverlapping(ptr, vec.as_mut_ptr(), len);
                 } else {
                     ptr::copy(ptr, vec.as_mut_ptr(), len);
                 }
             }
-            vec.set_len(len);
-            vec
         }
+        // we handle advancing to equal with `len`,
+        // thus `len` bytes are initialized
+        unsafe { vec.set_len(len) };
+        vec
     }
 
     unsafe fn into_mut(
         data: &mut AtomicPtr<()>,
         ptr: *const u8,
         len: usize,
-        map_ptr: impl Fn(*mut u8) -> *mut u8,
+        map_ptr: fn(*mut u8) -> *mut u8,
     ) -> BytesMut {
         let shared = data.get_mut().cast();
 
         match shared::into_unpromoted_raw(shared) {
-            Ok(buf_ptr) => unsafe {
+            Ok(buf_ptr) => {
                 let buf_ptr = map_ptr(buf_ptr.cast());
-                let offset = ptr.offset_from(buf_ptr) as usize;
+                let advanced = unsafe { ptr.offset_from(buf_ptr) } as usize;
 
-                let vec = Vec::from_raw_parts(buf_ptr, offset + len, offset + len);
+                // unpromoted will not represent tail offset, it will be promoted beforehand,
+                // thus it is the same as full length vector
+                //
+                // we also add `advanced` to the total length,
+                // so that `advance_unchecked()` below works correctly
+                let vec = unsafe { Vec::from_raw_parts(buf_ptr, advanced + len, advanced + len) };
                 let mut bufm = BytesMut::from_vec(vec);
-                // in contrast with `Vec`, `BytesMut` can represent `advance`,
-                // so no copy required
-                bufm.advance_unchecked(offset);
-                bufm.set_len(len); // handle tail offset
+
+                unsafe {
+                    // in contrast with `Vec`, `BytesMut` can represent `advance`,
+                    // so no copying is required
+                    bufm.advance_unchecked(advanced);
+                }
+                assert_eq!(bufm.len(), len);
                 bufm
             }
-            Err(shared) => unsafe {
+            Err(shared) => {
                 let buf_ptr = shared.as_ptr();
-                let offset = ptr.offset_from(buf_ptr) as usize;
+                let offset = unsafe { ptr.offset_from(buf_ptr) } as usize;
                 let cap = shared.capacity();
 
-                match shared::release_into_vec(shared, cap) {
+                // the returned `Some(vec)` here can contains uninitialized bytes,
+                // but it is fixed by `advance_unchecked` and `set_len`
+                match unsafe { shared::release_into_vec(shared, cap) } {
                     Some(vec) => {
                         let mut bufm = BytesMut::from_vec(vec);
-                        bufm.advance_unchecked(offset);
-                        bufm.set_len(len); // handle tail offset
+                        unsafe {
+                            // handle head advanced
+                            bufm.advance_unchecked(offset);
+                            // handle tail offset
+                            bufm.set_len(len);
+                        }
                         bufm
                     }
-                    None => BytesMut::from_vec(slice::from_raw_parts(ptr, len).to_vec()),
+                    None => BytesMut::from_vec(unsafe {
+                        slice::from_raw_parts(ptr, len).to_vec()
+                    }),
                 }
             },
         }

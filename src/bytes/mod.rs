@@ -25,7 +25,7 @@ pub use bytestr::ByteStr;
 pub use cursor::Cursor;
 
 pub mod error {
-    //! Errors type.
+    //! Error types.
     pub use super::bytestr::FromUtf8Error;
 }
 

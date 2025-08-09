@@ -286,3 +286,26 @@ fn test_bytes_from_mut() {
     assert_eq!(vec.as_ptr(), ptr);
 }
 
+impl Bytes {
+    #[cfg(test)]
+    #[doc(hidden)]
+    pub(super) fn assert_promoted(&self) {
+        let ptr = self
+            .data()
+            .load(std::sync::atomic::Ordering::Acquire)
+            .cast();
+        assert!(crate::bytes::shared::is_promoted(ptr));
+        let _ = unsafe { &*ptr };
+    }
+
+    #[cfg(test)]
+    #[doc(hidden)]
+    pub(super) fn assert_unpromoted(&self) {
+        let ptr = self
+            .data()
+            .load(std::sync::atomic::Ordering::Acquire)
+            .cast();
+        assert!(crate::bytes::shared::is_unpromoted(ptr));
+    }
+}
+
