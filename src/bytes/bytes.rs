@@ -6,7 +6,7 @@ use std::{
 
 use super::{
     Buf, BytesMut,
-    shared,
+    shared::{self, Shared},
 };
 
 /// A cheaply cloneable and sliceable chunk of contiguous memory.
@@ -100,7 +100,7 @@ impl Bytes {
         }
     }
 
-    pub(crate) fn from_mut(shared: *mut shared::Shared, mut bytesm: BytesMut) -> Self {
+    pub(crate) fn from_mut(shared: *mut Shared, mut bytesm: BytesMut) -> Self {
         debug_assert!(shared::is_promoted(shared));
         Bytes {
             ptr: bytesm.as_mut_ptr(),
@@ -217,6 +217,7 @@ impl Bytes {
     }
 
     #[cfg(test)]
+    #[doc(hidden)]
     pub(crate) fn data(&self) -> &AtomicPtr<()> {
         &self.data
     }
