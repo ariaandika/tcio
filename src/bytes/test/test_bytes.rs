@@ -429,11 +429,71 @@ fn test_bytes_shared_split_to_into_mut() {
     into_mut!(buf, ne! = ptr, b"-Type");
 }
 
+// Slice
+
+#[test]
+fn test_bytes_shared_slice() {
+    let buf = Bytes::from(b"Content-Type".to_vec());
+
+    buf.assert_unpromoted();
+    let slice = buf.slice(3..8);
+    buf.assert_promoted();
+
+    assert_eq!(slice.as_slice(), b"tent-");
+}
+
+#[test]
+fn test_bytes_shared_slice_ref() {
+    let buf = Bytes::from(b"Content-Type".to_vec());
+
+    let slice_ref = &buf[3..8];
+    let slice = buf.slice_ref(slice_ref);
+    buf.assert_promoted();
+
+    assert_eq!(slice.as_slice(), b"tent-");
+}
+
+#[test]
+fn test_bytes_shared_slice_ref_diff_provenance() {
+    let boxed = Box::new(b"Local111");
+    let buf = Bytes::from(b"Content-Type".to_vec());
+
+    let data = boxed.as_ptr().with_addr(buf.as_ptr().wrapping_add(3).addr());
+
+    let slice = buf.slice_from_raw(data, 5);
+    buf.assert_promoted();
+    assert_eq!(slice.as_slice(), b"tent-");
+}
+
+#[test]
+#[should_panic(expected = "`Bytes::slice_raw` pointer out of bounds")]
+fn test_bytes_shared_slice_ref_ptr_less_than() {
+    let buf = Bytes::from(b"Content-Type".to_vec());
+    let data = buf.as_ptr().wrapping_sub(4);
+    let _slice = buf.slice_from_raw(data, 5);
+}
+
+#[test]
+#[should_panic(expected = "`Bytes::slice_raw` length out of bounds")]
+fn test_bytes_shared_slice_ref_ptr_more_than() {
+    let buf = Bytes::from(b"Content-Type".to_vec());
+    let data = buf.as_ptr().wrapping_add(b"Content-Type".len() + 4);
+    let _slice = buf.slice_from_raw(data, 5);
+}
+
+#[test]
+#[should_panic(expected = "`Bytes::slice_raw` length out of bounds")]
+fn test_bytes_shared_slice_ref_len_oob() {
+    let buf = Bytes::from(b"Content-Type".to_vec());
+    let data = buf.as_ptr().wrapping_add(1);
+    let _slice = buf.slice_from_raw(data, usize::MAX);
+}
+
+// ...
+
 // TODO:
 // split_to promoted, split_to drop
 // combine advance, truncate, destructure
-
-// ...
 
 #[test]
 fn test_bytes_shared_split_off() {
