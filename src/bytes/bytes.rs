@@ -240,18 +240,27 @@ impl Bytes {
     /// # Panics
     ///
     /// `range` should be in bounds of bytes capacity, otherwise panic.
-    pub fn slice(&self, range: impl std::ops::RangeBounds<usize>) -> Self {
+    #[inline]
+    pub fn slice(&self, range: impl core::ops::RangeBounds<usize>) -> Self {
+        self.slice_inner(range.start_bound(), range.end_bound())
+    }
+
+    fn slice_inner(
+        &self,
+        start_bound: core::ops::Bound<&usize>,
+        end_bound: core::ops::Bound<&usize>,
+    ) -> Self {
         use core::ops::Bound;
 
         let len = self.len();
 
-        let begin = match range.start_bound() {
+        let begin = match start_bound {
             Bound::Included(&n) => n,
             Bound::Excluded(&n) => n.checked_add(1).expect("out of range"),
             Bound::Unbounded => 0,
         };
 
-        let end = match range.end_bound() {
+        let end = match end_bound {
             Bound::Included(&n) => n.checked_add(1).expect("out of range"),
             Bound::Excluded(&n) => n,
             Bound::Unbounded => len,
@@ -261,20 +270,15 @@ impl Bytes {
             begin <= end,
             "range start must not be greater than end: {begin:?} <= {end:?}",
         );
-        assert!(
-            end <= len,
-            "range end out of bounds: {end:?} <= {len:?}",
-        );
+        assert!(end <= len, "range end out of bounds: {end:?} <= {len:?}",);
 
         if end == begin {
             return Bytes::new_empty_with_ptr(self.ptr.wrapping_add(begin));
         }
 
         let mut cloned = self.clone();
-
         cloned.len = end - begin;
         cloned.ptr = unsafe { cloned.ptr.add(begin) };
-
         cloned
     }
 
@@ -290,28 +294,28 @@ impl Bytes {
             return Bytes::new();
         }
 
-        let bytes_p = self.as_ptr() as usize;
-        let bytes_len = self.len();
+        let ptr = self.as_ptr() as usize;
+        let len = self.len();
 
         let sub_p = subset.as_ptr() as usize;
         let sub_len = subset.len();
 
         assert!(
-            sub_p >= bytes_p,
+            sub_p >= ptr,
             "subset pointer ({:p}) is smaller than self pointer ({:p})",
             subset.as_ptr(),
             self.as_ptr(),
         );
         assert!(
-            sub_p + sub_len <= bytes_p + bytes_len,
+            sub_p + sub_len <= ptr + len,
             "subset is out of bounds: self = ({:p}, {}), subset = ({:p}, {})",
             self.as_ptr(),
-            bytes_len,
+            len,
             subset.as_ptr(),
             sub_len,
         );
 
-        let sub_offset = sub_p - bytes_p;
+        let sub_offset = sub_p - ptr;
 
         self.slice(sub_offset..(sub_offset + sub_len))
     }
@@ -324,7 +328,7 @@ impl Bytes {
     /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
     pub fn split_off(&mut self, at: usize) -> Self {
         if at == self.len() {
-            return Bytes::new_empty_with_ptr(self.ptr.wrapping_add(at));
+            return Bytes::new_empty_with_ptr(unsafe { self.ptr.add(at) });
         }
 
         if at == 0 {
@@ -339,10 +343,9 @@ impl Bytes {
         );
 
         let mut clone = self.clone();
+        unsafe { clone.advance_unchecked(at) };
 
         self.len = at;
-
-        unsafe { clone.advance_unchecked(at) };
 
         clone
     }
@@ -355,8 +358,7 @@ impl Bytes {
     /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
     pub fn split_to(&mut self, at: usize) -> Self {
         if at == self.len() {
-            let end_ptr = self.ptr.wrapping_add(at);
-            return mem::replace(self, Bytes::new_empty_with_ptr(end_ptr));
+            return mem::replace(self, Bytes::new_empty_with_ptr(unsafe { self.ptr.add(at) }));
         }
 
         if at == 0 {
