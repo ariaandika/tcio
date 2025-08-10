@@ -287,7 +287,7 @@ impl Bytes {
     ///
     /// # Panics
     ///
-    /// `subset` should be in bytes content, otherwise panic.
+    /// `subset` should be contained in `Bytes` content, otherwise panic.
     pub fn slice_ref(&self, subset: &[u8]) -> Self {
         // Empty slice and empty Bytes may have their pointers reset
         // so explicitly allow empty slice to be a subslice of any slice.
@@ -319,6 +319,36 @@ impl Bytes {
         let sub_offset = sub_p - ptr;
 
         self.slice(sub_offset..(sub_offset + sub_len))
+    }
+
+    /// Returns the shared subset of `Bytes` with given slice.
+    ///
+    /// # Panics
+    ///
+    /// The slice from `data` up to `len` should be contained in `Bytes` content, otherwise panic.
+    pub fn slice_from_raw(&self, data: *const u8, len: usize) -> Self {
+        let self_data = self.ptr.addr();
+        let data = data.addr();
+
+        let offset = data
+            .checked_sub(self_data)
+            .expect("`Bytes::slice_raw` pointer out of bounds");
+
+        let ptr = unsafe { self.ptr.add(offset) };
+
+        if len == 0 {
+            return Bytes::new_empty_with_ptr(ptr);
+        }
+
+        assert!(
+            data.saturating_add(len) <= self_data + self.len,
+            "`Bytes::slice_raw` length out of bounds"
+        );
+
+        let mut cloned = self.clone();
+        cloned.ptr = ptr;
+        cloned.len = len;
+        cloned
     }
 
     /// Splits `Bytes` into two at the given index.
