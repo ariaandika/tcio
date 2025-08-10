@@ -243,17 +243,17 @@ impl Bytes {
     /// `range` should be in bounds of bytes capacity, otherwise panic.
     #[inline]
     pub fn slice(&self, range: impl core::ops::RangeBounds<usize>) -> Self {
-        self.slice_inner(range.start_bound(), range.end_bound())
+        self.slice_bound(range.start_bound(), range.end_bound())
     }
 
-    fn slice_inner(
+    fn slice_bound(
         &self,
         start_bound: core::ops::Bound<&usize>,
         end_bound: core::ops::Bound<&usize>,
     ) -> Self {
         use core::ops::Bound;
 
-        let len = self.len();
+        let self_len = self.len;
 
         let begin = match start_bound {
             Bound::Included(&n) => n,
@@ -264,22 +264,39 @@ impl Bytes {
         let end = match end_bound {
             Bound::Included(&n) => n.checked_add(1).expect("out of range"),
             Bound::Excluded(&n) => n,
-            Bound::Unbounded => len,
+            Bound::Unbounded => self_len,
         };
 
-        assert!(
-            begin <= end,
-            "range start must not be greater than end: {begin:?} <= {end:?}",
-        );
-        assert!(end <= len, "range end out of bounds: {end:?} <= {len:?}",);
+        assert!(end <= self_len, "range end out of bounds: {end:?} <= {self_len:?}",);
 
-        if end == begin {
-            return Bytes::new_empty_with_ptr(self.ptr.wrapping_add(begin));
+        // ASSERT:
+        // 1. then `begin <= end`
+        // 2. then `len <= end`
+        // 3. then `end <= self.len`,
+        // 5. #1, then `begin <= self.len`
+        // 4. #1 and #2, then `len <= self.len`
+        let len = end.checked_sub(begin).expect("range should not be reversed");
+
+        // SAFETY:
+        // with invariant that `self.ptr` valid until `self.len` forward
+        //
+        // 1. `begin` and `end` is relative to `self.ptr`, then `ptr` always in front of `self.ptr`
+        // 2. `begin <= self.len`, then `self.ptr.add(begin) <= self.len`
+        // 3. - because `end <= self.len`
+        //    - then `self.ptr.add(end) <= self.ptr.add(self.len)`
+        //    - then `len < self.len`
+        //    - then `len` correctly represent offset of `self.ptr.add(begin)` to `self.ptr.add(begin)`
+        //
+        // then `self.ptr.add(begin)` valid until `len` forward
+        let ptr = unsafe { self.ptr.add(begin) };
+
+        if len == 0 {
+            return Bytes::new_empty_with_ptr(ptr);
         }
 
         let mut cloned = self.clone();
-        cloned.len = end - begin;
-        cloned.ptr = unsafe { cloned.ptr.add(begin) };
+        cloned.ptr = ptr;
+        cloned.len = len;
         cloned
     }
 
