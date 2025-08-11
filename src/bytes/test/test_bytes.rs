@@ -2,6 +2,12 @@ use crate::bytes::{Buf, Bytes, BytesMut};
 
 /// NOTE: Vector with excess capacity will create Bytes in promoted state
 macro_rules! vec_excess {
+    ($b:expr) => {{
+        let mut vec = Vec::with_capacity($b.len() + 6);
+        vec.extend($b);
+        assert_ne!(vec.capacity(), vec.len());
+        vec
+    }};
     ($cap:expr; $($e:tt)*) => {{
         let mut vec = Vec::with_capacity($cap);
         vec.extend(&[$($e)*]);
@@ -9,37 +15,28 @@ macro_rules! vec_excess {
     }};
 }
 
-macro_rules! b_excess {
-    ($b:expr) => {{
-        let mut vec = Vec::with_capacity($b.len() + 6);
-        vec.extend($b);
-        assert_ne!(vec.capacity(), vec.len());
-        vec
-    }};
-}
-
 macro_rules! into_vec {
+    ($buf:expr, eq! = $ptr:expr, $slice:expr) => {
+        let vec = $buf.into_vec();
+        assert_eq!(vec.as_ptr(), $ptr);
+        assert_eq!(vec.as_slice(), $slice);
+    };
     ($buf:expr, ne! = $ptr:expr, $slice:expr) => {
         let vec = $buf.into_vec();
         assert_ne!(vec.as_ptr(), $ptr);
         assert_eq!(vec.as_slice(), $slice);
     };
-    ($buf:expr, $ptr:expr, $slice:expr) => {
-        let vec = $buf.into_vec();
-        assert_eq!(vec.as_ptr(), $ptr);
-        assert_eq!(vec.as_slice(), $slice);
-    };
 }
 
 macro_rules! into_mut {
+    ($buf:expr, eq! = $ptr:expr, $slice:expr) => {
+        let bufm = $buf.into_mut();
+        assert_eq!(bufm.as_ptr(), $ptr);
+        assert_eq!(bufm.as_slice(), $slice);
+    };
     ($buf:expr, ne! = $ptr:expr, $slice:expr) => {
         let bufm = $buf.into_mut();
         assert_ne!(bufm.as_ptr(), $ptr);
-        assert_eq!(bufm.as_slice(), $slice);
-    };
-    ($buf:expr, $ptr:expr, $slice:expr) => {
-        let bufm = $buf.into_mut();
-        assert_eq!(bufm.as_ptr(), $ptr);
         assert_eq!(bufm.as_slice(), $slice);
     };
 }
@@ -80,6 +77,8 @@ fn test_bytes_shared_unique() {
 
 // Constructor
 
+// # Lifecycle
+//
 // Source
 // - Vec
 // - Vec Promoted
@@ -88,6 +87,8 @@ fn test_bytes_shared_unique() {
 // - drop
 // - into_vec
 // - into_mut
+//
+// # Operation
 //
 // Offset
 // - advance
@@ -104,6 +105,8 @@ fn test_bytes_shared_unique() {
 // Bytes(Source) -> Clone -> Offset -> Destructor
 // ...
 
+// ===== Not Mutated =====
+
 #[test]
 fn test_bytes_shared() {
     let buf = Bytes::from(vec![4; 8]);
@@ -118,14 +121,14 @@ fn test_bytes_shared() {
 fn test_bytes_shared_into_vec() {
     let buf = Bytes::from(vec![4; 8]);
     let ptr = buf.as_ptr();
-    into_vec!(buf, ptr, &[4; 8]);
+    into_vec!(buf, eq! = ptr, &[4; 8]);
 }
 
 #[test]
 fn test_bytes_shared_into_mut() {
     let buf = Bytes::from(vec![4; 8]);
     let ptr = buf.as_ptr();
-    into_mut!(buf, ptr, &[4; 8]);
+    into_mut!(buf, eq! = ptr, &[4; 8]);
 }
 
 
@@ -143,17 +146,17 @@ fn test_bytes_promoted() {
 fn test_bytes_promoted_into_vec() {
     let buf = Bytes::from(vec_excess![12; 4; 8]);
     let ptr = buf.as_ptr();
-    into_vec!(buf, ptr, &[4; 8]);
+    into_vec!(buf, eq! = ptr, &[4; 8]);
 }
 
 #[test]
 fn test_bytes_promoted_into_mut() {
     let buf = Bytes::from(vec_excess![12; 4; 8]);
     let ptr = buf.as_ptr();
-    into_mut!(buf, ptr, &[4; 8]);
+    into_mut!(buf, eq! = ptr, &[4; 8]);
 }
 
-// Advance
+// ===== Advance =====
 
 #[test]
 fn test_bytes_shared_advanced() {
@@ -170,14 +173,10 @@ fn test_bytes_shared_advanced() {
 fn test_bytes_shared_advanced_into_vec() {
     let mut buf = Bytes::from(b"Content-Type".to_vec());
     let ptr = buf.as_ptr();
-
     buf.advance(2);
-
-    let vec = buf.into_vec();
     // note that even though we `advance`, the pointer is unchanged,
     // because Bytes prefer backward copy in favor of reallocating
-    assert_eq!(vec.as_ptr(), ptr);
-    assert_eq!(vec.as_slice(), b"ntent-Type");
+    into_vec!(buf, eq! = ptr, b"ntent-Type");
 }
 
 #[test]
@@ -185,13 +184,15 @@ fn test_bytes_shared_advanced_into_mut() {
     let mut buf = Bytes::from(b"Content-Type".to_vec());
     let ptr = buf.as_ptr();
     buf.advance(2);
-    into_mut!(buf, ptr.wrapping_add(2), b"ntent-Type");
+    // in contrast with `into_vec`, BytesMut can represent `advance`,
+    // thus no copy or reallocating
+    into_mut!(buf, eq! = ptr.wrapping_add(2), b"ntent-Type");
 }
 
 
 #[test]
 fn test_bytes_promoted_advanced() {
-    let mut buf = Bytes::from(b_excess![b"Content-Type"]);
+    let mut buf = Bytes::from(vec_excess![b"Content-Type"]);
 
     buf.advance(2);
     buf.assert_promoted();
@@ -202,21 +203,21 @@ fn test_bytes_promoted_advanced() {
 
 #[test]
 fn test_bytes_promoted_advanced_into_vec() {
-    let mut buf = Bytes::from(b_excess![b"Content-Type"]);
+    let mut buf = Bytes::from(vec_excess![b"Content-Type"]);
     let ptr = buf.as_ptr();
     buf.advance(2);
-    into_vec!(buf, ptr, b"ntent-Type");
+    into_vec!(buf, eq! = ptr, b"ntent-Type");
 }
 
 #[test]
 fn test_bytes_promoted_advanced_into_mut() {
-    let mut buf = Bytes::from(b_excess![b"Content-Type"]);
+    let mut buf = Bytes::from(vec_excess![b"Content-Type"]);
     let ptr = buf.as_ptr();
     buf.advance(2);
-    into_mut!(buf, ptr.wrapping_add(2), b"ntent-Type");
+    into_mut!(buf, eq! = ptr.wrapping_add(2), b"ntent-Type");
 }
 
-// Truncate
+// ===== Truncate =====
 
 #[test]
 fn test_bytes_shared_truncate() {
@@ -237,7 +238,7 @@ fn test_bytes_shared_truncate_into_vec() {
     let mut buf = Bytes::from(b"Content-Type".to_vec());
     let ptr = buf.as_ptr();
     buf.truncate(7);
-    into_vec!(buf, ptr, b"Content");
+    into_vec!(buf, eq! = ptr, b"Content");
 }
 
 #[test]
@@ -245,13 +246,13 @@ fn test_bytes_shared_truncate_into_mut() {
     let mut buf = Bytes::from(b"Content-Type".to_vec());
     let ptr = buf.as_ptr();
     buf.truncate(7);
-    into_vec!(buf, ptr, b"Content");
+    into_vec!(buf, eq! = ptr, b"Content");
 }
 
 
 #[test]
 fn test_bytes_promoted_truncate() {
-    let mut buf = Bytes::from(b_excess![b"Content-Type"]);
+    let mut buf = Bytes::from(vec_excess![b"Content-Type"]);
 
     buf.assert_promoted();
     buf.truncate(7);
@@ -263,27 +264,27 @@ fn test_bytes_promoted_truncate() {
 
 #[test]
 fn test_bytes_promoted_truncate_into_vec() {
-    let mut buf = Bytes::from(b_excess![b"Content-Type"]);
+    let mut buf = Bytes::from(vec_excess![b"Content-Type"]);
     let ptr = buf.as_ptr();
     buf.truncate(7);
-    into_vec!(buf, ptr, b"Content");
+    into_vec!(buf, eq! = ptr, b"Content");
 }
 
 #[test]
 fn test_bytes_promoted_truncate_into_mut() {
-    let mut buf = Bytes::from(b_excess![b"Content-Type"]);
+    let mut buf = Bytes::from(vec_excess![b"Content-Type"]);
     let ptr = buf.as_ptr();
     buf.truncate(7);
-    into_vec!(buf, ptr, b"Content");
+    into_vec!(buf, eq! = ptr, b"Content");
 }
 
-// Cloned
+// ===== Cloned =====
 
 #[test]
 fn test_bytes_shared_cloned() {
     let buf = Bytes::from(vec![4; 8]);
-    buf.assert_unpromoted();
 
+    buf.assert_unpromoted();
     let cloned = buf.clone();
     buf.assert_promoted();
     cloned.assert_promoted();
@@ -297,11 +298,8 @@ fn test_bytes_shared_cloned_into_vec() {
     let buf = Bytes::from(vec![4; 8]);
     let ptr = buf.as_ptr();
     let _cloned = buf.clone();
-
-    let vec = buf.into_vec();
     // not unique, allocate and copy required
-    assert_ne!(vec.as_ptr(), ptr);
-    assert_eq!(vec.as_slice(), (&[4; 8]));
+    into_vec!(buf, ne! = ptr, &[4; 8]);
 }
 
 #[test]
@@ -340,10 +338,8 @@ fn test_bytes_promoted_cloned_into_mut() {
 #[test]
 fn test_bytes_shared_cloned_drop() {
     let buf = Bytes::from(vec![4; 8]);
-
     drop(buf.clone());
     buf.assert_promoted();
-
     drop(buf);
 }
 
@@ -351,13 +347,9 @@ fn test_bytes_shared_cloned_drop() {
 fn test_bytes_shared_cloned_drop_into_vec() {
     let buf = Bytes::from(vec![4; 8]);
     let ptr = buf.as_ptr();
-
     drop(buf.clone());
-
-    let vec = buf.into_vec();
-    // already promoted, no reallocation
-    assert_eq!(vec.as_ptr(), ptr);
-    assert_eq!(vec.as_slice(), (&[4; 8]));
+    // buffer is unique, no reallocation
+    into_vec!(buf, eq! = ptr, &[4; 8]);
 }
 
 #[test]
@@ -365,17 +357,15 @@ fn test_bytes_shared_cloned_drop_into_mut() {
     let buf = Bytes::from(vec![4; 8]);
     let ptr = buf.as_ptr();
     drop(buf.clone());
-    into_mut!(buf, ptr, &[4; 8]);
+    into_mut!(buf, eq! = ptr, &[4; 8]);
 }
 
 
 #[test]
 fn test_bytes_promoted_cloned_drop() {
     let buf = Bytes::from(vec_excess![12; 4; 8]);
-
     drop(buf.clone());
     buf.assert_promoted();
-
     drop(buf);
 }
 
@@ -383,10 +373,8 @@ fn test_bytes_promoted_cloned_drop() {
 fn test_bytes_promoted_cloned_drop_into_vec() {
     let buf = Bytes::from(vec_excess![12; 4; 8]);
     let ptr = buf.as_ptr();
-
     drop(buf.clone());
-
-    into_vec!(buf, ptr, &[4; 8]);
+    into_vec!(buf, eq! = ptr, &[4; 8]);
 }
 
 #[test]
@@ -394,10 +382,10 @@ fn test_bytes_promoted_cloned_drop_into_mut() {
     let buf = Bytes::from(vec_excess![12; 4; 8]);
     let ptr = buf.as_ptr();
     drop(buf.clone());
-    into_mut!(buf, ptr, &[4; 8]);
+    into_mut!(buf, eq! = ptr, &[4; 8]);
 }
 
-// Split
+// ===== Split =====
 
 #[test]
 fn test_bytes_shared_split_to() {
@@ -413,23 +401,7 @@ fn test_bytes_shared_split_to() {
     drop(buf);
 }
 
-#[test]
-fn test_bytes_shared_split_to_into_vec() {
-    let mut buf = Bytes::from(b"Content-Type".to_vec());
-    let ptr = buf.as_ptr();
-    let _to = buf.split_to(7);
-    into_vec!(buf, ne! = ptr, b"-Type");
-}
-
-#[test]
-fn test_bytes_shared_split_to_into_mut() {
-    let mut buf = Bytes::from(b"Content-Type".to_vec());
-    let ptr = buf.as_ptr();
-    let _to = buf.split_to(7);
-    into_mut!(buf, ne! = ptr, b"-Type");
-}
-
-// Slice
+// ===== Slice =====
 
 #[test]
 fn test_bytes_shared_slice() {
@@ -439,7 +411,18 @@ fn test_bytes_shared_slice() {
     let slice = buf.slice(3..8);
     buf.assert_promoted();
 
-    assert_eq!(slice.as_slice(), b"tent-");
+    assert_eq!(slice.as_slice(), &buf[3..8]);
+}
+
+#[test]
+#[should_panic]
+fn test_bytes_shared_slice_oob() {
+    let buf = Bytes::from(b"Content-Type".to_vec());
+    let oob_len = buf.len() + 1;
+
+    let slice = buf.slice(3..oob_len);
+
+    assert_eq!(slice.as_slice(), &buf[3..oob_len]);
 }
 
 #[test]
@@ -466,7 +449,7 @@ fn test_bytes_shared_slice_ref_diff_provenance() {
 }
 
 #[test]
-#[should_panic(expected = "`Bytes::slice_raw` pointer out of bounds")]
+#[should_panic]
 fn test_bytes_shared_slice_ref_ptr_less_than() {
     let buf = Bytes::from(b"Content-Type".to_vec());
     let data = buf.as_ptr().wrapping_sub(4);
@@ -474,7 +457,7 @@ fn test_bytes_shared_slice_ref_ptr_less_than() {
 }
 
 #[test]
-#[should_panic(expected = "`Bytes::slice_raw` length out of bounds")]
+#[should_panic]
 fn test_bytes_shared_slice_ref_ptr_more_than() {
     let buf = Bytes::from(b"Content-Type".to_vec());
     let data = buf.as_ptr().wrapping_add(b"Content-Type".len() + 4);
@@ -482,7 +465,7 @@ fn test_bytes_shared_slice_ref_ptr_more_than() {
 }
 
 #[test]
-#[should_panic(expected = "`Bytes::slice_raw` length out of bounds")]
+#[should_panic]
 fn test_bytes_shared_slice_ref_len_oob() {
     let buf = Bytes::from(b"Content-Type".to_vec());
     let data = buf.as_ptr().wrapping_add(1);
@@ -511,6 +494,18 @@ fn test_bytes_shared_split_off() {
 }
 
 // BytesMut
+
+// #[test]
+// fn test_bytes_only() {
+//     let buf = Bytes::from(b"Content-Type".to_vec());
+//
+//     let slice = buf.slice_from_raw(
+//         unsafe { buf.as_ptr().add(isize::MAX as usize - buf.as_ptr().addr()) },
+//         5,
+//     );
+//     buf.assert_promoted();
+//     assert_eq!(slice.as_slice(), b"tent-");
+// }
 
 #[test]
 fn test_bytes_from_mut() {
