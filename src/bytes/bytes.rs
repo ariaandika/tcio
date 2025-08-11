@@ -201,6 +201,10 @@ impl Bytes {
 
     // private
 
+    /// Specialized empty `Bytes` with given pointer.
+    ///
+    /// This is used when split and resulting in empty `Bytes` that does not need to increment the
+    /// atomic counter.
     fn new_empty_with_ptr(ptr: *const u8) -> Self {
         debug_assert!(!ptr.is_null());
 
@@ -353,26 +357,24 @@ impl Bytes {
     ///
     /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
     pub fn split_off(&mut self, at: usize) -> Self {
-        if at == self.len() {
-            return Bytes::new_empty_with_ptr(unsafe { self.ptr.add(at) });
+        let len = self.len;
+
+        if at == len {
+            // SAFETY: `self.ptr.add(self.len)` is valid
+            let ptr = unsafe { self.ptr.add(len) };
+            return Bytes::new_empty_with_ptr(ptr);
         }
 
         if at == 0 {
             return mem::replace(self, Bytes::new_empty_with_ptr(self.ptr));
         }
 
-        assert!(
-            at <= self.len(),
-            "split_off out of bounds: {:?} <= {:?}",
-            at,
-            self.len(),
-        );
+        assert!(at <= len, "split_off out of bounds: {at:?} <= {len:?}");
 
         let mut clone = self.clone();
+        // SAFETY: `at <= self.len`
         unsafe { clone.advance_unchecked(at) };
-
         self.len = at;
-
         clone
     }
 
@@ -383,25 +385,23 @@ impl Bytes {
     ///
     /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
     pub fn split_to(&mut self, at: usize) -> Self {
-        if at == self.len() {
-            return mem::replace(self, Bytes::new_empty_with_ptr(unsafe { self.ptr.add(at) }));
+        let len = self.len;
+
+        if at == len {
+            // SAFETY: `self.ptr.add(self.len)` is valid
+            let ptr = unsafe { self.ptr.add(len) };
+            return mem::replace(self, Bytes::new_empty_with_ptr(ptr));
         }
 
         if at == 0 {
             return Bytes::new_empty_with_ptr(self.ptr);
         }
 
-        assert!(
-            at <= self.len,
-            "split_to out of bounds: {:?} <= {:?}",
-            at,
-            self.len(),
-        );
+        assert!(at <= len, "split_to out of bounds: {at:?} <= {len:?}");
 
         let mut clone = self.clone();
-
+        // SAFETY: `at <= self.len`
         unsafe { self.advance_unchecked(at) };
-
         clone.len = at;
         clone
     }
