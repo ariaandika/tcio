@@ -401,7 +401,35 @@ fn test_bytes_shared_split_to() {
     drop(buf);
 }
 
-// ===== Slice =====
+#[test]
+#[should_panic]
+fn test_bytes_shared_split_to_oob() {
+    let mut buf = Bytes::from(b"Content-Type".to_vec());
+    let _to = buf.split_to(usize::MAX);
+}
+
+#[test]
+fn test_bytes_shared_split_off() {
+    let mut buf = Bytes::from(b"Content-Type".to_vec());
+
+    buf.assert_unpromoted();
+    let to = buf.split_off(7);
+    buf.assert_promoted();
+
+    assert_eq!(buf.as_slice(), b"Content");
+    assert_eq!(to.as_slice(), b"-Type");
+
+    drop(buf);
+}
+
+#[test]
+#[should_panic]
+fn test_bytes_shared_split_off_oob() {
+    let mut buf = Bytes::from(b"Content-Type".to_vec());
+    let _to = buf.split_off(usize::MAX);
+}
+
+// ===== Slice Range =====
 
 #[test]
 fn test_bytes_shared_slice() {
@@ -416,96 +444,105 @@ fn test_bytes_shared_slice() {
 
 #[test]
 #[should_panic]
-fn test_bytes_shared_slice_oob() {
+fn test_bytes_shared_slice_oob_len() {
     let buf = Bytes::from(b"Content-Type".to_vec());
-    let oob_len = buf.len() + 1;
-
-    let slice = buf.slice(3..oob_len);
-
-    assert_eq!(slice.as_slice(), &buf[3..oob_len]);
+    let _slice = buf.slice(4..buf.len() + 1);
 }
+
+#[test]
+#[should_panic]
+fn test_bytes_shared_slice_oob_offset() {
+    let buf = Bytes::from(b"Content-Type".to_vec());
+    let _slice = buf.slice(buf.len()..buf.len() * 2);
+}
+
+// ===== Slice Raw =====
 
 #[test]
 fn test_bytes_shared_slice_ref() {
     let buf = Bytes::from(b"Content-Type".to_vec());
 
-    let slice_ref = &buf[3..8];
-    let slice = buf.slice_ref(slice_ref);
+    let slice = buf.slice_ref(&buf[3..8]);
     buf.assert_promoted();
 
-    assert_eq!(slice.as_slice(), b"tent-");
+    assert_eq!(slice.as_slice(), &buf[3..8]);
 }
 
 #[test]
-fn test_bytes_shared_slice_ref_diff_provenance() {
+fn test_bytes_shared_slice_raw_unprovenance() {
     let boxed = Box::new(b"Local111");
     let buf = Bytes::from(b"Content-Type".to_vec());
 
     let data = boxed.as_ptr().with_addr(buf.as_ptr().wrapping_add(3).addr());
-
     let slice = buf.slice_from_raw(data, 5);
     buf.assert_promoted();
-    assert_eq!(slice.as_slice(), b"tent-");
+
+    assert_eq!(slice.as_slice(), &buf[3..3 + 5]);
 }
+
+// # OOB Cases
+//
+// - Bytes:     [==]
+//   Range: [--]
+//
+// - Bytes:     [==]
+//   Range:   [--]
+//
+// - Bytes:     [==]
+//   Range:   [------]
+//
+// - Bytes:     [==]
+//   Range:       [--]
+//
+// - Bytes:     [==]
+//   Range:         [--]
 
 #[test]
 #[should_panic]
-fn test_bytes_shared_slice_ref_ptr_less_than() {
+fn test_bytes_shared_slice_raw_ptr_oob_1() {
     let buf = Bytes::from(b"Content-Type".to_vec());
     let data = buf.as_ptr().wrapping_sub(4);
-    let _slice = buf.slice_from_raw(data, 5);
+    let _slice = buf.slice_from_raw(data, 2);
 }
 
 #[test]
 #[should_panic]
-fn test_bytes_shared_slice_ref_ptr_more_than() {
+fn test_bytes_shared_slice_raw_ptr_oob_2() {
     let buf = Bytes::from(b"Content-Type".to_vec());
-    let data = buf.as_ptr().wrapping_add(b"Content-Type".len() + 4);
-    let _slice = buf.slice_from_raw(data, 5);
+    let data = buf.as_ptr().wrapping_sub(4);
+    let _slice = buf.slice_from_raw(data, 6);
 }
 
 #[test]
 #[should_panic]
-fn test_bytes_shared_slice_ref_len_oob() {
+fn test_bytes_shared_slice_raw_ptr_oob_3() {
     let buf = Bytes::from(b"Content-Type".to_vec());
-    let data = buf.as_ptr().wrapping_add(1);
-    let _slice = buf.slice_from_raw(data, usize::MAX);
+    let data = buf.as_ptr().wrapping_sub(4);
+    let _slice = buf.slice_from_raw(data, buf.len() + 8);
+}
+
+#[test]
+#[should_panic]
+fn test_bytes_shared_slice_raw_ptr_oob_4() {
+    let buf = Bytes::from(b"Content-Type".to_vec());
+    let data = buf.as_ptr().wrapping_add(4);
+    let _slice = buf.slice_from_raw(data, buf.len());
+}
+
+#[test]
+#[should_panic]
+fn test_bytes_shared_slice_raw_ptr_oob_5() {
+    let buf = Bytes::from(b"Content-Type".to_vec());
+    let data = buf.as_ptr().wrapping_add(buf.len());
+    let _slice = buf.slice_from_raw(data, buf.len() + 8);
 }
 
 // ...
 
 // TODO:
-// split_to promoted, split_to drop
 // combine advance, truncate, destructure
 
-#[test]
-fn test_bytes_shared_split_off() {
-    let mut buf = Bytes::from(vec![4u8; 8]);
-
-    let to = buf.split_off(5);
-
-    buf.assert_promoted();
-    assert!(!buf.is_unique());
-    assert_eq!(buf.as_slice(), &[4u8; 5]);
-    assert_eq!(to.as_slice(), &[4u8; 8 - 5]);
-    drop(to);
-
-    assert!(buf.is_unique());
-}
-
 // BytesMut
-
-// #[test]
-// fn test_bytes_only() {
-//     let buf = Bytes::from(b"Content-Type".to_vec());
-//
-//     let slice = buf.slice_from_raw(
-//         unsafe { buf.as_ptr().add(isize::MAX as usize - buf.as_ptr().addr()) },
-//         5,
-//     );
-//     buf.assert_promoted();
-//     assert_eq!(slice.as_slice(), b"tent-");
-// }
 
 #[test]
 fn test_bytes_from_mut() {
