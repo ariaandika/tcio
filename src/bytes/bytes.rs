@@ -270,22 +270,22 @@ impl Bytes {
         assert!(end <= self_len, "range end out of bounds: {end:?} <= {self_len:?}",);
 
         // ASSERT:
-        // 1. then `begin <= end`
-        // 2. then `len <= end`
-        // 3. then `end <= self.len`,
-        // 5. #1, then `begin <= self.len`
-        // 4. #1 and #2, then `len <= self.len`
+        // 1. is `begin <= end`
+        // 2. is `len <= end`
+        // 3. is `end <= self.len`,
+        // 4. #1, then `begin <= self.len`
+        // 5. #1 and #2, then `len <= self.len`
         let len = end.checked_sub(begin).expect("range should not be reversed");
 
         // SAFETY:
         // with invariant that `self.ptr` valid until `self.len` forward
         //
-        // 1. `begin` and `end` is relative to `self.ptr`, then `ptr` always in front of `self.ptr`
-        // 2. `begin <= self.len`, then `self.ptr.add(begin) <= self.len`
-        // 3. - because `end <= self.len`
-        //    - then `self.ptr.add(end) <= self.ptr.add(self.len)`
-        //    - then `len < self.len`
-        //    - then `len` correctly represent offset of `self.ptr.add(begin)` to `self.ptr.add(begin)`
+        // 1. is `begin` and `end` is relative to `self.ptr`, then `self.ptr <= ptr`
+        // 2. is `begin <= self.len`, then `self.ptr.add(begin) <= self.len`
+        // 3. - is `end <= self.len`, then `self.ptr.add(end) <= self.ptr.add(self.len)`
+        //    - is `len <= end`, then `len < self.len`
+        //    - then `len` correctly represent offset of
+        //      `self.ptr.add(begin)` to `self.ptr.add(begin)`
         //
         // then `self.ptr.add(begin)` valid until `len` forward
         let ptr = unsafe { self.ptr.add(begin) };
@@ -305,37 +305,9 @@ impl Bytes {
     /// # Panics
     ///
     /// `subset` should be contained in `Bytes` content, otherwise panic.
+    #[inline]
     pub fn slice_ref(&self, subset: &[u8]) -> Self {
-        // Empty slice and empty Bytes may have their pointers reset
-        // so explicitly allow empty slice to be a subslice of any slice.
-        if subset.is_empty() {
-            return Bytes::new();
-        }
-
-        let ptr = self.as_ptr() as usize;
-        let len = self.len();
-
-        let sub_p = subset.as_ptr() as usize;
-        let sub_len = subset.len();
-
-        assert!(
-            sub_p >= ptr,
-            "subset pointer ({:p}) is smaller than self pointer ({:p})",
-            subset.as_ptr(),
-            self.as_ptr(),
-        );
-        assert!(
-            sub_p + sub_len <= ptr + len,
-            "subset is out of bounds: self = ({:p}, {}), subset = ({:p}, {})",
-            self.as_ptr(),
-            len,
-            subset.as_ptr(),
-            sub_len,
-        );
-
-        let sub_offset = sub_p - ptr;
-
-        self.slice(sub_offset..(sub_offset + sub_len))
+        self.slice_from_raw(subset.as_ptr(), subset.len())
     }
 
     /// Returns the shared subset of `Bytes` with given slice.
@@ -344,26 +316,32 @@ impl Bytes {
     ///
     /// The slice from `data` up to `len` should be contained in `Bytes` content, otherwise panic.
     pub fn slice_from_raw(&self, data: *const u8, len: usize) -> Self {
-        let self_data = self.ptr.addr();
-        let data = data.addr();
+        let self_addr = self.ptr.addr();
+        let addr = data.addr();
 
-        let offset = data
-            .checked_sub(self_data)
-            .expect("`Bytes::slice_raw` pointer out of bounds");
-
-        let ptr = unsafe { self.ptr.add(offset) };
-
-        if len == 0 {
-            return Bytes::new_empty_with_ptr(ptr);
-        }
-
+        // this checks that input end pointer is still within buffer range
         assert!(
-            data.saturating_add(len) <= self_data + self.len,
-            "`Bytes::slice_raw` length out of bounds"
+            addr.checked_add(len).unwrap() <= self_addr + self.len,
+            "length out of bounds"
         );
 
+        let offset = addr
+            .checked_sub(self_addr)
+            .expect("pointer out of bounds");
+
+        // SAFETY: this is the same as input `data` just using
+        // usize offset to detach pointer provenance
+        let data = unsafe { self.ptr.add(offset) };
+
+        if len == 0 {
+            return Self::new_empty_with_ptr(data);
+        }
+
+        // with assert and checked sub,
+        // `data` is valid until `len` byte forward
+
         let mut cloned = self.clone();
-        cloned.ptr = ptr;
+        cloned.ptr = data;
         cloned.len = len;
         cloned
     }
