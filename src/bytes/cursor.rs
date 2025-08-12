@@ -45,14 +45,14 @@ impl<'a> Cursor<'a> {
     #[inline]
     pub const fn steps(&self) -> usize {
         // SAFETY: invariant `self.start <= self.cursor`
-        unsafe { self.cursor.offset_from(self.start) as _ }
+        unsafe { self.cursor.offset_from_unsigned(self.start) }
     }
 
     /// Returns the remaining bytes length.
     #[inline]
     pub const fn remaining(&self) -> usize {
         // SAFETY: invariant `self.cursor <= self.end`
-        unsafe { self.end.offset_from(self.cursor) as _ }
+        unsafe { self.end.offset_from_unsigned(self.cursor) }
     }
 
     /// Returns `true` if there is more bytes left.
@@ -65,21 +65,21 @@ impl<'a> Cursor<'a> {
     #[inline]
     pub const fn original(&self) -> &'a [u8] {
         // SAFETY: invariant `self.start <= self.end`
-        unsafe { std::slice::from_raw_parts(self.start, self.end.offset_from(self.start) as _) }
+        unsafe { core::slice::from_raw_parts(self.start, self.end.offset_from_unsigned(self.start)) }
     }
 
     /// Returns the already advanced slice.
     #[inline]
     pub const fn advanced_slice(&self) -> &'a [u8] {
         // SAFETY: invariant `self.cursor <= self.end`
-        unsafe { std::slice::from_raw_parts(self.start, self.steps()) }
+        unsafe { core::slice::from_raw_parts(self.start, self.steps()) }
     }
 
     /// Returns the remaining bytes.
     #[inline]
     pub const fn as_slice(&self) -> &'a [u8] {
         // SAFETY: invariant `self.cursor <= self.end`
-        unsafe { std::slice::from_raw_parts(self.cursor, self.remaining()) }
+        unsafe { core::slice::from_raw_parts(self.cursor, self.remaining()) }
     }
 
     /// Returns the pointer this cursor point to.

@@ -650,7 +650,7 @@ mod shared_vtable {
         let (advanced, mut vec) = match shared::into_unpromoted_raw(shared) {
             Ok(buf_ptr) => {
                 let buf_ptr = map_ptr(buf_ptr.cast());
-                let advanced = unsafe { ptr.offset_from(buf_ptr) } as usize;
+                let advanced = unsafe { ptr.offset_from_unsigned(buf_ptr) };
 
                 // unpromoted will not represent tail offset, it will be promoted beforehand,
                 // thus it is the same as full length vector
@@ -660,7 +660,7 @@ mod shared_vtable {
             }
             Err(shared) => {
                 let buf_ptr = shared.as_ptr();
-                let advanced = unsafe { ptr.offset_from(buf_ptr) } as usize;
+                let advanced = unsafe { ptr.offset_from_unsigned(buf_ptr) };
                 let cap = shared.capacity();
 
                 // the returned `Some(vec)` here can contains uninitialized bytes,
@@ -704,7 +704,7 @@ mod shared_vtable {
         match shared::into_unpromoted_raw(shared) {
             Ok(buf_ptr) => {
                 let buf_ptr = map_ptr(buf_ptr.cast());
-                let advanced = unsafe { ptr.offset_from(buf_ptr) } as usize;
+                let advanced = unsafe { ptr.offset_from_unsigned(buf_ptr) };
 
                 // unpromoted will not represent tail offset, it will be promoted beforehand,
                 // thus it is the same as full length vector
@@ -724,7 +724,7 @@ mod shared_vtable {
             }
             Err(shared) => {
                 let buf_ptr = shared.as_ptr();
-                let offset = unsafe { ptr.offset_from(buf_ptr) } as usize;
+                let offset = unsafe { ptr.offset_from_unsigned(buf_ptr) };
                 let cap = shared.capacity();
 
                 // the returned `Some(vec)` here can contains uninitialized bytes,
@@ -759,7 +759,7 @@ mod shared_vtable {
         match shared::into_unpromoted_raw(shared) {
             Ok(buf_ptr) => {
                 let buf_ptr = map_ptr(buf_ptr.cast());
-                let advanced = unsafe { ptr.offset_from(buf_ptr) } as usize;
+                let advanced = unsafe { ptr.offset_from_unsigned(buf_ptr) };
 
                 // unpromoted will not represent tail offset, it will be promoted beforehand,
                 // thus it is the same as full length vector

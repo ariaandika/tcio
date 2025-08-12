@@ -178,7 +178,7 @@ impl BytesMut {
     /// if the buffer didn't allocate.
     #[inline]
     pub const fn as_ptr(&self) -> *const u8 {
-        unsafe { self.ptr.as_ref() }
+        self.ptr.as_ptr()
     }
 
     /// Returns a raw mutable pointer to the buffer, or a dangling raw pointer valid for zero sized
@@ -325,7 +325,9 @@ impl BytesMut {
             Err(shared) => {
                 if shared::is_unique(shared) {
                     let shared_ptr = shared.as_ptr();
-                    let offset = unsafe { ptr.offset_from(shared_ptr) } as usize;
+                    // SAFETY: `ptr` is originated from `shared_ptr`, and the only `ptr` operation
+                    // is addition through `.advance_unchecked()`
+                    let offset = unsafe { ptr.offset_from_unsigned(shared_ptr) };
 
                     // reclaim the leftover tail capacity
                     {

@@ -40,7 +40,7 @@ impl ByteStr {
     /// otherwise this function will panic.
     #[inline]
     pub fn from_slice_of(subset: &str, bytes: &Bytes) -> Self {
-        Self { bytes: bytes.slice_ref(subset.as_bytes()) }
+        Self { bytes: bytes.slice_from_raw(subset.as_ptr(), subset.len()) }
     }
 
     /// Converts a [`Bytes`] to a [`ByteStr`] without checking that the string contains valid
@@ -51,6 +51,7 @@ impl ByteStr {
     /// The bytes passed in must be valid UTF-8.
     #[inline]
     pub const unsafe fn from_utf8_unchecked(bytes: Bytes) -> Self {
+        debug_assert!(str::from_utf8(bytes.as_slice()).is_ok(), "`from_utf8_unchecked` receive non-UTF8");
         Self { bytes }
     }
 
