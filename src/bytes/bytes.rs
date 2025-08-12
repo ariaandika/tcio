@@ -131,6 +131,8 @@ impl Bytes {
     }
 
     /// Shortens the buffer, keeping the first `len` bytes and dropping the rest.
+    ///
+    /// If `len` is greater or equal to the `BytesMut` length, this has no effect.
     #[inline]
     pub fn truncate(&mut self, len: usize) {
         if len < self.len {
@@ -141,6 +143,23 @@ impl Bytes {
                 drop(self.split_off(len));
             } else {
                 self.len = len;
+            }
+        }
+    }
+
+    /// Shortens the buffer, dropping the last `len` bytes and keeping the rest.
+    ///
+    /// If `off` is greater to the `BytesMut` length, this has no effect.
+    #[inline]
+    pub fn truncate_off(&mut self, off: usize) {
+        if let Some(new_len) = self.len.checked_sub(off) {
+            if Vtable::is_shared(self.vtable) {
+                // this introduce "tail offset",
+                // which cannot be represented in unpromoted,
+                // thus required to be promoted
+                drop(self.split_off(new_len));
+            } else {
+                self.len = new_len;
             }
         }
     }

@@ -234,6 +234,14 @@ fn test_bytes_shared_truncate() {
 }
 
 #[test]
+fn test_bytes_shared_truncate_off() {
+    let mut buf = Bytes::from(b"Content-Type".to_vec());
+    buf.truncate_off(5);
+    assert_eq!(buf.as_slice(), b"Content");
+    drop(buf);
+}
+
+#[test]
 fn test_bytes_shared_truncate_into_vec() {
     let mut buf = Bytes::from(b"Content-Type".to_vec());
     let ptr = buf.as_ptr();
@@ -258,6 +266,14 @@ fn test_bytes_promoted_truncate() {
     buf.truncate(7);
     buf.assert_promoted();
 
+    assert_eq!(buf.as_slice(), b"Content");
+    drop(buf);
+}
+
+#[test]
+fn test_bytes_promoted_truncate_off() {
+    let mut buf = Bytes::from(vec_excess![b"Content-Type"]);
+    buf.truncate_off(5);
     assert_eq!(buf.as_slice(), b"Content");
     drop(buf);
 }

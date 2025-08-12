@@ -149,10 +149,22 @@ impl BytesMut {
     }
 
     /// Shortens the buffer, keeping the first `len` bytes and dropping the rest.
+    ///
+    /// If `len` is greater or equal to the `BytesMut` length, this has no effect.
     #[inline]
     pub const fn truncate(&mut self, len: usize) {
         if len < self.len {
             self.len = len;
+        }
+    }
+
+    /// Shortens the buffer, dropping the last `len` bytes and keeping the rest.
+    ///
+    /// If `off` is greater or equal to the `BytesMut` length, this has no effect.
+    #[inline]
+    pub const fn truncate_off(&mut self, off: usize) {
+        if let Some(new_len) = self.len.checked_sub(off) {
+            self.len = new_len;
         }
     }
 
