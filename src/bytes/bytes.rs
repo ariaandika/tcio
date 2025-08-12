@@ -105,7 +105,7 @@ impl Bytes {
         Bytes {
             ptr: bytesm.as_mut_ptr(),
             len: bytesm.len(),
-            data: AtomicPtr::new(shared as _),
+            data: AtomicPtr::new(shared.cast()),
             vtable: Vtable::shared_promoted(),
         }
     }
@@ -206,14 +206,8 @@ impl Bytes {
     /// This is used when split and resulting in empty `Bytes` that does not need to increment the
     /// atomic counter.
     fn new_empty_with_ptr(ptr: *const u8) -> Self {
-        debug_assert!(!ptr.is_null());
-
-        // Detach this pointer's provenance from whichever allocation it came from, and reattach it
-        // to the provenance of the fake ZST [u8;0] at the same address.
-        let ptr = ptr::without_provenance(ptr as usize);
-
         Bytes {
-            ptr,
+            ptr: ptr::without_provenance(ptr.addr()),
             len: 0,
             data: AtomicPtr::new(ptr::null_mut()),
             vtable: Vtable::static_bytes(),
@@ -540,7 +534,7 @@ mod shared_vtable {
 
     impl Vtable {
         pub(super) fn shared_unpromoted(data: *mut u8) -> (*mut u8, &'static Vtable) {
-            if shared::is_payload_compliance(data as _) {
+            if shared::is_payload_compliance(data.addr()) {
                 (data, &SHARED)
             } else {
                 // "map" the pointer to comply with `Shared` arbitrary payload
@@ -566,7 +560,7 @@ mod shared_vtable {
     }
 
     fn map_ptr(shared: *mut u8) -> *mut u8 {
-        shared.with_addr(!(shared as usize))
+        shared.with_addr(!shared.addr())
     }
 
     macro_rules! with_map {
