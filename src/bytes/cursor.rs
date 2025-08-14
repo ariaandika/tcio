@@ -30,6 +30,21 @@ impl<'a> Cursor<'a> {
         }
     }
 
+    /// Workaround for self referencing struct.
+    ///
+    /// The callers must not expose mutable reference of given buffer while `Cursor` is not yet
+    /// dropped.
+    pub(crate) const fn new_unbound(buf: &[u8]) -> Self {
+        Self {
+            start: buf.as_ptr(),
+            cursor: buf.as_ptr(),
+            // SAFETY: allocated objects can never be larger than `isize::MAX` bytes,
+            // `self.cursor == self.end` is always safe
+            end: unsafe { buf.as_ptr().add(buf.len()) },
+            _p: std::marker::PhantomData,
+        }
+    }
+
     /// Take current cursor to `len` of the slice.
     ///
     /// If `len` is more than slice length, the length is saturated.

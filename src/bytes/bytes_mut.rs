@@ -6,8 +6,8 @@ use std::{
 };
 
 use super::{
-    Buf, Bytes,
-    shared::{self, Shared}
+    Buf, Bytes, Cursor, CursorBuf,
+    shared::{self, Shared},
 };
 
 // BytesMut is a unique `&mut [u8]` over a shared heap allocated `[u8]`
@@ -477,6 +477,18 @@ impl BytesMut {
         self.cap = at;
         self.len = cmp::min(self.len, at); // could advance pass `self.len`
         other
+    }
+
+    /// Create new [`CursorBuf`] from current `BytesMut`.
+    #[inline]
+    pub fn cursor(&self) -> Cursor<'_> {
+        Cursor::new(self)
+    }
+
+    /// Create new mutable [`CursorBuf`] from current buffer.
+    #[inline]
+    pub fn cursor_mut(&mut self) -> CursorBuf<&mut Self> {
+        CursorBuf::<&mut Self>::shared_mut(self)
     }
 
     /// # Safety
