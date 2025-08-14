@@ -80,6 +80,15 @@ macro_rules! delegate_cursor {
                 Self::shared_mut(value)
             }
         }
+
+        impl<'a,$($lf),*> std::ops::Deref for CursorBuf<&'a mut $ty2> {
+            type Target = Cursor<'a>;
+
+            #[inline]
+            fn deref(&self) -> &Self::Target {
+                &self.cursor
+            }
+        }
     };
     {
         impl $ty2:ty; $($tt:tt)*
@@ -104,9 +113,9 @@ macro_rules! delegate_bytes {
                 self.cursor = Cursor::new_unbound(self.buf.as_slice());
             }
 
-            /// split the contained buffer based on current cursor.
+            /// Split the contained buffer based on current cursor.
             ///
-            /// The underlying [`Cursor`] is reset reflecting the splitted buffer.
+            /// The underlying [`Cursor`] then will be at the start of the buffer.
             #[inline]
             pub fn split_to(&mut self) -> $ty2 {
                 let bytes = self.buf.split_to(self.cursor.steps());
@@ -114,14 +123,23 @@ macro_rules! delegate_bytes {
                 bytes
             }
 
-            /// split the contained buffer based on current cursor.
+            /// Split the contained buffer based on current cursor.
             ///
-            /// The underlying [`Cursor`] is reset reflecting the splitted buffer.
+            /// The underlying [`Cursor`] then will be at the end of the buffer.
             #[inline]
             pub fn split_off(&mut self) -> $ty2 {
                 let bytes = self.buf.split_off(self.cursor.steps());
-                self.cursor = Cursor::new_unbound(self.buf.as_slice());
+                self.cursor = Cursor::from_end_unbound(self.buf.as_slice());
                 bytes
+            }
+
+            /// Truncate the underlying buffer.
+            ///
+            /// The underlying [`Cursor`] then will be at the end of the buffer.
+            #[inline]
+            pub fn truncated(&mut self) {
+                self.buf.truncate(self.cursor.steps());
+                self.cursor = Cursor::from_end_unbound(self.buf.as_slice());
             }
         }
     };
@@ -176,14 +194,5 @@ impl<T> CursorBuf<T> {
     #[inline]
     pub fn into_inner(self) -> T {
         self.buf
-    }
-}
-
-impl<'a> std::ops::Deref for CursorBuf<&'a mut Bytes> {
-    type Target = Cursor<'a>;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        &self.cursor
     }
 }

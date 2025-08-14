@@ -36,6 +36,7 @@ fn test_cursor_buf_split_to() {
     let split = cursor.split_to();
 
     assert_eq!(split.as_slice(), b"Content");
+    assert_eq!(cursor.as_slice(), b"-Type");
     assert_eq!(bytes.as_slice(), b"-Type");
 }
 
@@ -48,5 +49,6 @@ fn test_cursor_buf_split_off() {
     let split = cursor.split_off();
 
     assert_eq!(split.as_slice(), b"-Type");
+    assert_eq!(cursor.as_slice(), b"");
     assert_eq!(bytes.as_slice(), b"Content");
 }
