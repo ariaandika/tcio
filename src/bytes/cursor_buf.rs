@@ -60,7 +60,15 @@ macro_rules! delegate_cursor {
             /// Panic if advancing pass slice length.
             #[inline]
             pub const fn advance(&mut self, n: usize) {
-                self.cursor.advance(n)
+                self.cursor.advance(n);
+            }
+
+            /// Advance cursor to the end.
+            ///
+            /// This is usefull when callers want to iterate backwards.
+            #[inline]
+            pub const fn advance_to_end(&mut self) {
+                self.cursor.advance_to_end();
             }
 
             /// Move cursor backwards cursor.
@@ -70,7 +78,7 @@ macro_rules! delegate_cursor {
             /// Panic if step back pass the first byte.
             #[inline]
             pub const fn step_back(&mut self, n: usize) {
-                self.cursor.step_back(n)
+                self.cursor.step_back(n);
             }
         }
 
@@ -133,11 +141,11 @@ macro_rules! delegate_bytes {
                 bytes
             }
 
-            /// Truncate the underlying buffer.
+            /// Truncate the contained buffer.
             ///
             /// The underlying [`Cursor`] then will be at the end of the buffer.
             #[inline]
-            pub fn truncated(&mut self) {
+            pub fn truncate_buf(&mut self) {
                 self.buf.truncate(self.cursor.steps());
                 self.cursor = Cursor::from_end_unbound(self.buf.as_slice());
             }
