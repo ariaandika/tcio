@@ -30,6 +30,24 @@ impl<'a> Cursor<'a> {
         }
     }
 
+    /// Create new [`Cursor`] with starting cursor at the end of the buffer.
+    ///
+    /// Following [`next()`][Cursor::next] call will returns [`None`].
+    ///
+    /// This is usefull when callers want to iterate backwards.
+    #[inline]
+    pub const fn from_end(buf: &'a [u8]) -> Self {
+        // SAFETY: allocated objects can never be larger than `isize::MAX` bytes,
+        // `self.cursor == self.end` is always safe
+        let end = unsafe { buf.as_ptr().add(buf.len()) };
+        Self {
+            start: buf.as_ptr(),
+            cursor: end,
+            end,
+            _p: std::marker::PhantomData,
+        }
+    }
+
     /// Workaround for self referencing struct.
     ///
     /// The callers must not expose mutable reference of given buffer while `Cursor` is not yet
@@ -41,6 +59,22 @@ impl<'a> Cursor<'a> {
             // SAFETY: allocated objects can never be larger than `isize::MAX` bytes,
             // `self.cursor == self.end` is always safe
             end: unsafe { buf.as_ptr().add(buf.len()) },
+            _p: std::marker::PhantomData,
+        }
+    }
+
+    /// Workaround for self referencing struct.
+    ///
+    /// The callers must not expose mutable reference of given buffer while `Cursor` is not yet
+    /// dropped.
+    pub(crate) const fn from_end_unbound(buf: &[u8]) -> Self {
+        // SAFETY: allocated objects can never be larger than `isize::MAX` bytes,
+        // `self.cursor == self.end` is always safe
+        let end = unsafe { buf.as_ptr().add(buf.len()) };
+        Self {
+            start: buf.as_ptr(),
+            cursor: end,
+            end,
             _p: std::marker::PhantomData,
         }
     }
@@ -228,6 +262,14 @@ impl<'a> Cursor<'a> {
 
         // SAFETY: asserted
         unsafe { self.cursor = self.cursor.add(n); }
+    }
+
+    /// Advance cursor to the end.
+    ///
+    /// This is usefull when callers want to iterate backwards.
+    #[inline]
+    pub const fn advance_to_end(&mut self) {
+        self.cursor = self.end;
     }
 
     /// Move cursor backwards cursor.
