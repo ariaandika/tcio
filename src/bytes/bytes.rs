@@ -638,15 +638,42 @@ mod shared_vtable {
                 let vec = unsafe { Vec::from_raw_parts(map_ptr(shared.cast()), len, len) };
                 let new_shared = shared::promote_with_vec(vec, 2);
 
-                // `unpromoted` means there is only one handle,
-                // thus its impossible to have concurent promotion
-                data.store(new_shared.cast(), Ordering::Relaxed);
-                assert!(shared::is_promoted(new_shared));
-                Bytes {
-                    ptr,
-                    len,
-                    data: AtomicPtr::new(new_shared.cast()),
-                    vtable: Vtable::shared_promoted(),
+                // because cloning is called via the `Clone` trait, which take `&self`, and `Bytes`
+                // is `Sync`, cloning could happens concurrently
+                match data.compare_exchange(shared.cast(), new_shared.cast(), Ordering::AcqRel, Ordering::Acquire) {
+                    Ok(old_shared) => {
+                        // the returned pointer is the old pointer
+                        debug_assert!(std::ptr::eq(old_shared, shared.cast()));
+                        debug_assert!(!std::ptr::eq(old_shared, new_shared.cast()));
+
+                        Bytes {
+                            ptr,
+                            len,
+                            data: AtomicPtr::new(new_shared.cast()),
+                            vtable: Vtable::shared_promoted(),
+                        }
+                    },
+                    Err(promoted_shared) => {
+                        // concurrent promotion happens during heap allocation
+                        debug_assert!(!std::ptr::eq(new_shared, promoted_shared.cast()));
+                        // the written pointer should have been promoted
+                        assert!(shared::is_promoted(promoted_shared.cast()));
+
+                        unsafe {
+                            // release the heap that failed the promotion
+                            shared::release(Box::from_raw(new_shared));
+
+                            // increase the shared reference
+                            shared::increment(&*promoted_shared.cast());
+                        }
+
+                        Bytes {
+                            ptr,
+                            len,
+                            data: AtomicPtr::new(shared.cast()),
+                            vtable: Vtable::shared_promoted(),
+                        }
+                    },
                 }
             }
             Err(shared_ref) => {
