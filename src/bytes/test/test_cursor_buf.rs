@@ -52,3 +52,15 @@ fn test_cursor_buf_split_off() {
     assert_eq!(cursor.as_slice(), b"");
     assert_eq!(bytes.as_slice(), b"Content");
 }
+
+#[test]
+fn test_cursor_buf_truncate() {
+    let mut bytes = BytesMut::copy_from_slice(b"Content-Type");
+    let mut cursor = bytes.cursor_mut();
+
+    cursor.advance(b"Content".len());
+    cursor.truncate_buf();
+
+    assert_eq!(cursor.as_slice(), b"");
+    assert_eq!(bytes.as_slice(), b"Content");
+}
