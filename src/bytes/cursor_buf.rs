@@ -25,61 +25,6 @@ macro_rules! delegate_cursor {
                     buf: bytes,
                 }
             }
-
-            // ===== Delegate method from mutable Cursor =====
-
-            // #[allow(clippy::should_implement_trait)]
-            /// Try get the first byte and advance the cursor by `1`.
-            #[inline]
-            pub const fn next(&mut self) -> Option<u8> {
-                self.cursor.next()
-            }
-
-            /// Try get the first `N`-th bytes and advance the cursor by `N`.
-            #[inline]
-            pub const fn next_chunk<const N: usize>(&mut self) -> Option<&'a [u8; N]> {
-                self.cursor.next_chunk()
-            }
-
-            /// Try get the previous byte and step back the cursor by `1`.
-            #[inline]
-            pub const fn prev(&mut self) -> Option<u8> {
-                self.cursor.prev()
-            }
-
-            /// Try get the previous `N`-th bytes and step back cursor by `N`.
-            #[inline]
-            pub const fn prev_chunk<const N: usize>(&mut self) -> Option<&'a [u8; N]> {
-                self.cursor.prev_chunk()
-            }
-
-            /// Advance cursor forward.
-            ///
-            /// # Panics
-            ///
-            /// Panic if advancing pass slice length.
-            #[inline]
-            pub const fn advance(&mut self, n: usize) {
-                self.cursor.advance(n);
-            }
-
-            /// Advance cursor to the end.
-            ///
-            /// This is usefull when callers want to iterate backwards.
-            #[inline]
-            pub const fn advance_to_end(&mut self) {
-                self.cursor.advance_to_end();
-            }
-
-            /// Move cursor backwards cursor.
-            ///
-            /// # Panics
-            ///
-            /// Panic if step back pass the first byte.
-            #[inline]
-            pub const fn step_back(&mut self, n: usize) {
-                self.cursor.step_back(n);
-            }
         }
 
         impl<'a,$($lf),*> From<&'a mut $ty2> for CursorBuf<&'a mut $ty2> {
@@ -95,6 +40,19 @@ macro_rules! delegate_cursor {
             #[inline]
             fn deref(&self) -> &Self::Target {
                 &self.cursor
+            }
+        }
+
+        impl<'a,$($lf),*> std::ops::DerefMut for CursorBuf<&'a mut $ty2> {
+            #[inline]
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                // SAFETY: static lifetime for workaround with self referencing struct, implicitly
+                // `cursor` have shared reference to `buf` which equal to the generic type
+                unsafe {
+                    std::mem::transmute::<&mut Cursor<'static>, &mut Self::Target>(
+                        &mut self.cursor
+                    )
+                }
             }
         }
     };
