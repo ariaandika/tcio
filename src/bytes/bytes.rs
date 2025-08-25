@@ -421,13 +421,13 @@ impl Bytes {
 
     /// Create new [`CursorBuf`] from current `Bytes`.
     #[inline]
-    pub fn cursor(&self) -> Cursor<'_> {
-        Cursor::new(self)
+    pub const fn cursor(&self) -> Cursor<'_> {
+        Cursor::new(self.as_slice())
     }
 
     /// Create new mutable [`CursorBuf`] from current buffer.
     #[inline]
-    pub fn cursor_mut(&mut self) -> CursorBuf<&mut Self> {
+    pub const fn cursor_mut(&mut self) -> CursorBuf<&mut Self> {
         CursorBuf::<&mut Self>::shared_mut(self)
     }
 }
