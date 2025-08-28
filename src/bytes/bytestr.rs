@@ -99,6 +99,20 @@ impl ByteStr {
     //     }
     // }
 
+    /// Shortens the buffer, keeping the first `len` bytes and dropping the rest.
+    ///
+    /// If `new_len` is greater or equal to the `BytesMut` length, this has no effect.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `new_len` does not lie on a [`char`] boundary.
+    pub fn truncate(&mut self, new_len: usize) {
+        if new_len <= self.len() {
+            assert!(self.is_char_boundary(new_len));
+            self.bytes.truncate(new_len);
+        }
+    }
+
     /// Clears the string, removing all data.
     #[inline]
     pub fn clear(&mut self) {
