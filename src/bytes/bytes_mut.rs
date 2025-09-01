@@ -455,6 +455,20 @@ impl BytesMut {
         clone
     }
 
+    /// Splits `BytesMut` into two at the given pointer.
+    ///
+    /// Afterwards `self` contains elements `[ptr, ptr + len)`, and the returned `BytesMut` contains
+    /// elements `[0, ptr)`.
+    ///
+    /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
+    #[inline]
+    pub fn split_to_ptr(&mut self, ptr: *const u8) -> BytesMut {
+        match ptr.addr().checked_sub(self.ptr.addr().get()) {
+            Some(at) => self.split_to(at),
+            None => panic!("BytesMut::split_to_ptr out of bounds")
+        }
+    }
+
     /// Splits `BytesMut` into two at the given index.
     ///
     /// Afterwards `self` contains elements `[0, at)`, and the returned `BytesMut` contains
@@ -477,6 +491,20 @@ impl BytesMut {
         self.cap = at;
         self.len = cmp::min(self.len, at); // could advance pass `self.len`
         other
+    }
+
+    /// Splits `BytesMut` into two at the given index.
+    ///
+    /// Afterwards `self` contains elements `[0, ptr)`, and the returned `BytesMut` contains
+    /// elements `[ptr, capacity)`.
+    ///
+    /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
+    #[inline]
+    pub fn split_off_ptr(&mut self, ptr: *const u8) -> BytesMut {
+        match ptr.addr().checked_sub(self.ptr.addr().get()) {
+            Some(at) => self.split_off(at),
+            None => panic!("BytesMut::split_off_ptr out of bounds")
+        }
     }
 
     /// Create new [`CursorBuf`] from current `BytesMut`.
