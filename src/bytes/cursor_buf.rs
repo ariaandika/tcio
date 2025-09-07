@@ -1,4 +1,4 @@
-use super::{Buf, Bytes, BytesMut, Cursor};
+use super::{Bytes, BytesMut, Cursor};
 
 /// Integration for [`Cursor`] with other buffer types.
 ///
@@ -75,7 +75,10 @@ macro_rules! delegate_bytes {
             /// The underlying [`Cursor`] is reset reflecting the advanced buffer.
             #[inline]
             pub fn advance_buf(&mut self) {
-                Buf::advance(&mut self.buf, self.cursor.steps());
+                // SAFETY: `cursor.steps()` is less than or equal to bytes length
+                unsafe {
+                    <$ty2>::advance_unchecked(&mut self.buf, self.cursor.steps());
+                }
                 self.cursor = Cursor::new_unbound(self.buf.as_slice());
             }
 

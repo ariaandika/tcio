@@ -243,7 +243,7 @@ impl Bytes {
     ///
     /// `count <= self.len`
     #[inline]
-    const unsafe fn advance_unchecked(&mut self, count: usize) {
+    pub(crate) const unsafe fn advance_unchecked(&mut self, count: usize) {
         debug_assert!(count <= self.len, "Bytes::advance_unchecked out of bounds");
         self.len -= count;
         self.ptr = unsafe { self.ptr.add(count) };
