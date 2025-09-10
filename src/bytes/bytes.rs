@@ -830,39 +830,13 @@ impl std::ops::Deref for Bytes {
     }
 }
 
-impl From<&'static [u8]> for Bytes {
-    #[inline]
-    fn from(value: &'static [u8]) -> Self {
-        Self::from_static(value)
-    }
-}
-
-impl From<&'static str> for Bytes {
-    #[inline]
-    fn from(value: &'static str) -> Self {
-        Self::from_static(value.as_bytes())
-    }
-}
-
-impl From<Vec<u8>> for Bytes {
-    #[inline]
-    fn from(value: Vec<u8>) -> Self {
-        Self::from_vec(value)
-    }
-}
-
-impl From<String> for Bytes {
-    #[inline]
-    fn from(value: String) -> Self {
-        Self::from_vec(value.into_bytes())
-    }
-}
-
-impl From<Box<[u8]>> for Bytes {
-    #[inline]
-    fn from(value: Box<[u8]>) -> Self {
-        Self::from_box(value)
-    }
+crate::macros::from! {
+    impl Bytes;
+    fn from(value: &'static [u8]) { Self::from_static(value) }
+    fn from(value: &'static str) { Self::from_static(value.as_bytes()) }
+    fn from(value: Box<[u8]>) { Self::from_box(value) }
+    fn from(value: Vec<u8>) { Self::from_vec(value) }
+    fn from(value: String) { Self::from_vec(value.into_bytes()) }
 }
 
 impl From<Bytes> for Vec<u8> {

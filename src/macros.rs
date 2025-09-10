@@ -354,4 +354,29 @@ macro_rules! partial_eq {
     };
 }
 
-pub(crate) use {partial_eq};
+macro_rules! from {
+    (
+        @impl <$($lf:lifetime),*> $me:ty;
+        fn $fn_id:ident($value:ident:$value_ty:ty) { $($e:expr);* }
+        $($tt:tt)*
+    ) => {
+        impl From<$value_ty> for $me {
+            #[inline]
+            fn $fn_id($value:$value_ty) -> Self {
+                $($e);*
+            }
+        }
+        crate::macros::from!(@impl <$($lf),*> $me; $($tt)*);
+    };
+    (@impl <$($lf:lifetime),*> $me:ty;) => { }; // base case
+
+    // user input
+    (
+        impl $(<$($lf:lifetime),*>)? $me:ty;
+        $($tt:tt)*
+    ) => {
+        crate::macros::from!(@impl <$($($lf),*)?> $me; $($tt)*);
+    };
+}
+
+pub(crate) use {partial_eq, from};
