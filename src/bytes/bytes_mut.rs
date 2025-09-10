@@ -677,6 +677,20 @@ impl std::ops::DerefMut for BytesMut {
     }
 }
 
+impl AsRef<[u8]> for BytesMut {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+impl AsMut<[u8]> for BytesMut {
+    #[inline]
+    fn as_mut(&mut self) -> &mut [u8] {
+        self.as_mut_slice()
+    }
+}
+
 crate::macros::from! {
     impl BytesMut;
     fn from(value: &[u8]) { BytesMut::from_vec(value.to_vec()) }

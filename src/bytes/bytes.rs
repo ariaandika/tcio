@@ -830,6 +830,13 @@ impl std::ops::Deref for Bytes {
     }
 }
 
+impl AsRef<[u8]> for Bytes {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
 crate::macros::from! {
     impl Bytes;
     fn from(value: &'static [u8]) { Self::from_static(value) }
