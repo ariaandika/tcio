@@ -432,44 +432,6 @@ impl Bytes {
     }
 }
 
-crate::macros::impl_std_traits! {
-    impl Bytes;
-
-    fn drop(&mut self) {
-        unsafe { (self.vtable.drop)(&mut self.data, self.ptr, self.len) }
-    }
-
-    fn clone(&self) {
-        unsafe { (self.vtable.clone)(&self.data, self.ptr, self.len) }
-    }
-
-    fn fmt(&self: Bytes, f) {
-        crate::fmt::lossy(&self.as_slice()).fmt(f)
-    }
-
-    fn default() { Self::new() }
-    fn deref(&self) -> &[u8] { self.as_slice() }
-
-    fn from(value: &'static [u8]) { Self::from_static(value) }
-    fn from(value: &'static str) { Self::from_static(value.as_bytes()) }
-    fn from(value: Vec<u8>) { Self::from_vec(value) }
-    fn from(value: String) { Self::from_vec(value.into_bytes()) }
-    fn from(value: Box<[u8]>) -> Self { Self::from_box(value) }
-
-    fn eq(&self, &other: [u8]) { <[u8]>::eq(self, other) }
-    fn eq(&self, &other: &[u8]) { <[u8]>::eq(self, *other) }
-    fn eq(&self, &other: str) { <[u8]>::eq(self, other.as_bytes()) }
-    fn eq(&self, &other: &str) { <[u8]>::eq(self, other.as_bytes()) }
-    fn eq(&self, &other: Vec<u8>) { <[u8]>::eq(self, other.as_slice()) }
-    fn eq(&self, &other: &Vec<u8>) { <[u8]>::eq(self, other.as_slice()) }
-    fn eq(&self, &other: Bytes) { <[u8]>::eq(self, &**other) }
-    fn eq(&self, &other: BytesMut) { <[u8]>::eq(self, &**other) }
-}
-
-crate::macros::impl_std_traits! {
-    fn from(value: Bytes) -> Vec<u8> { value.into_vec() }
-}
-
 impl Buf for Bytes {
     #[inline]
     fn remaining(&self) -> usize {
@@ -829,3 +791,95 @@ mod shared_vtable {
         }
     }
 }
+
+// ===== std traits =====
+
+impl Drop for Bytes {
+    #[inline]
+    fn drop(&mut self) {
+        unsafe { (self.vtable.drop)(&mut self.data, self.ptr, self.len) }
+    }
+}
+
+impl Clone for Bytes {
+    #[inline]
+    fn clone(&self) -> Self {
+        unsafe { (self.vtable.clone)(&self.data, self.ptr, self.len) }
+    }
+}
+
+impl std::fmt::Debug for Bytes {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        crate::fmt::lossy(&self.as_slice()).fmt(f)
+    }
+}
+
+impl Default for Bytes {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::ops::Deref for Bytes {
+    type Target = [u8];
+    #[inline]
+    fn deref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
+impl From<&'static [u8]> for Bytes {
+    #[inline]
+    fn from(value: &'static [u8]) -> Self {
+        Self::from_static(value)
+    }
+}
+
+impl From<&'static str> for Bytes {
+    #[inline]
+    fn from(value: &'static str) -> Self {
+        Self::from_static(value.as_bytes())
+    }
+}
+
+impl From<Vec<u8>> for Bytes {
+    #[inline]
+    fn from(value: Vec<u8>) -> Self {
+        Self::from_vec(value)
+    }
+}
+
+impl From<String> for Bytes {
+    #[inline]
+    fn from(value: String) -> Self {
+        Self::from_vec(value.into_bytes())
+    }
+}
+
+impl From<Box<[u8]>> for Bytes {
+    #[inline]
+    fn from(value: Box<[u8]>) -> Self {
+        Self::from_box(value)
+    }
+}
+
+impl From<Bytes> for Vec<u8> {
+    #[inline]
+    fn from(value: Bytes) -> Self {
+        value.into_vec()
+    }
+}
+
+impl Eq for Bytes {}
+
+crate::macros::partial_eq! {
+    impl Bytes;
+    fn eq(self, other: [u8]) { <[u8]>::eq(self, other) }
+    fn eq(self, other: str) { <[u8]>::eq(self, other.as_bytes()) }
+    fn eq(self, other: Vec<u8>) { <[u8]>::eq(self, other.as_slice()) }
+    fn eq(self, other: Self) { <[u8]>::eq(self, other.as_slice()) }
+    fn eq(self, other: BytesMut) { <[u8]>::eq(self, other.as_slice()) }
+}
+
