@@ -624,9 +624,10 @@ impl BytesMut {
     }
 }
 
-crate::macros::impl_std_traits! {
-    impl BytesMut;
+// ===== std traits =====
 
+impl Drop for BytesMut {
+    #[inline]
     fn drop(&mut self) {
         match shared::into_unpromoted(self.data) {
             Ok(offset) => {
@@ -638,28 +639,63 @@ crate::macros::impl_std_traits! {
             },
         }
     }
+}
 
-    fn fmt(&self: BytesMut, f) {
+impl Clone for BytesMut {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self::copy_from_slice(self.as_slice())
+    }
+}
+
+impl std::fmt::Debug for BytesMut {
+    #[inline]
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         crate::fmt::lossy(&self.as_slice()).fmt(f)
     }
+}
 
-    fn default() { Self::new() }
-    fn clone(&self) { Self::copy_from_slice(self.as_slice()) }
+impl Default for BytesMut {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
-    fn deref(&self) -> &[u8] { self.as_slice() }
-    fn deref_mut(&mut self) -> &mut [u8] { self.as_mut_slice() }
+impl std::ops::Deref for BytesMut {
+    type Target = [u8];
+    #[inline]
+    fn deref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
 
+impl std::ops::DerefMut for BytesMut {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut [u8] {
+        self.as_mut_slice()
+    }
+}
+
+crate::macros::from! {
+    impl BytesMut;
     fn from(value: &[u8]) { BytesMut::from_vec(value.to_vec()) }
     fn from(value: &str) { BytesMut::from_vec(value.as_bytes().to_vec()) }
     fn from(value: Vec<u8>) { BytesMut::from_vec(value) }
-
-    fn eq(&self, &other: [u8]) { self.as_slice() == other }
-    fn eq(&self, &other: &[u8]) { self.as_slice() == *other }
+    fn from(value: Bytes) { value.into_mut() }
 }
 
-crate::macros::impl_std_traits! {
-    fn from(value: BytesMut) -> Bytes { value.freeze() }
+impl Eq for BytesMut {}
+
+crate::macros::partial_eq! {
+    impl BytesMut;
+    fn eq(self, other: [u8]) { <[u8]>::eq(self, other) }
+    fn eq(self, other: str) { <[u8]>::eq(self, other.as_bytes()) }
+    fn eq(self, other: Vec<u8>) { <[u8]>::eq(self, other.as_slice()) }
+    fn eq(self, other: Self) { <[u8]>::eq(self, other.as_slice()) }
+    fn eq(self, other: Bytes) { <[u8]>::eq(self, other.as_slice()) }
 }
+
 
 impl Buf for BytesMut {
     #[inline]

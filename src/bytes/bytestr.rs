@@ -168,34 +168,16 @@ impl ByteStr {
 // ===== Constructor =====
 // everything should be constructed from a valid ut8
 
-impl From<&'static str> for ByteStr {
-    #[inline]
-    fn from(value: &'static str) -> Self {
-        Self::from_static(value)
-    }
-}
-
-impl From<std::borrow::Cow<'static,str>> for ByteStr {
-    #[inline]
-    fn from(value: std::borrow::Cow<'static,str>) -> Self {
+crate::macros::from! {
+    impl ByteStr;
+    fn from(value: &'static str) { Self::from_static(value) }
+    fn from(value: Box<str>) { Self { bytes: Bytes::from(value.into_boxed_bytes()) } }
+    fn from(value: String) { Self { bytes: value.into_bytes().into() } }
+    fn from(value: std::borrow::Cow<'static,str>) {
         match value {
             std::borrow::Cow::Borrowed(s) => Self::from(s),
             std::borrow::Cow::Owned(s) => Self::from(s),
         }
-    }
-}
-
-impl From<Box<str>> for ByteStr {
-    #[inline]
-    fn from(value: Box<str>) -> Self {
-        Self { bytes: Bytes::from(value.into_boxed_bytes()) }
-    }
-}
-
-impl From<String> for ByteStr {
-    #[inline]
-    fn from(value: String) -> Self {
-        Self { bytes: Bytes::from(value.into_bytes()) }
     }
 }
 
@@ -238,23 +220,34 @@ impl AsRef<str> for ByteStr {
     }
 }
 
-impl std::fmt::Display for ByteStr {
+impl std::fmt::Debug for ByteStr {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        std::fmt::Display::fmt(self.as_str(), f)
+        self.as_str().fmt(f)
     }
 }
 
-crate::macros::impl_std_traits! {
+impl std::fmt::Display for ByteStr {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        self.as_str().fmt(f)
+    }
+}
+
+impl std::ops::Deref for ByteStr {
+    type Target = str;
+
+    #[inline]
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl Eq for ByteStr { }
+
+crate::macros::partial_eq! {
     impl ByteStr;
-
-    fn deref(&self) -> &str { self.as_str() }
-
-    fn fmt(&self: ByteStr, f) { str::fmt(self, f) }
-
-    fn eq(&self, &other: str) { str::eq(self, other) }
-    fn eq(&self, &other: &str) { str::eq(self, *other) }
-    fn eq(&self, &other: String) { str::eq(self, other) }
-    fn eq(&self, &other: ByteStr) { str::eq(self, other.as_str()) }
+    fn eq(self, other: str) { str::eq(self, other) }
+    fn eq(self, other: String) { str::eq(self, other) }
+    fn eq(self, other: Self) { str::eq(self, other.as_str()) }
 }
 
 // ===== Error =====

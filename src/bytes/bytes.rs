@@ -837,6 +837,7 @@ crate::macros::from! {
     fn from(value: Box<[u8]>) { Self::from_box(value) }
     fn from(value: Vec<u8>) { Self::from_vec(value) }
     fn from(value: String) { Self::from_vec(value.into_bytes()) }
+    fn from(value: BytesMut) { value.freeze() }
 }
 
 impl From<Bytes> for Vec<u8> {
