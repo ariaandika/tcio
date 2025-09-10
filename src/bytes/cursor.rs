@@ -340,3 +340,24 @@ impl<'a> Cursor<'a> {
         *other = self;
     }
 }
+
+impl<'a> From<&'a [u8]> for Cursor<'a> {
+    #[inline]
+    fn from(value: &'a [u8]) -> Self {
+        Cursor::new(value)
+    }
+}
+
+impl<'a> From<&'a super::Bytes> for Cursor<'a> {
+    #[inline]
+    fn from(value: &'a super::Bytes) -> Self {
+        value.cursor()
+    }
+}
+
+impl<'a> From<&'a super::BytesMut> for Cursor<'a> {
+    #[inline]
+    fn from(value: &'a super::BytesMut) -> Self {
+        value.cursor()
+    }
+}
