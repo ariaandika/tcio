@@ -150,18 +150,44 @@ impl<'a> Cursor<'a> {
         }
     }
 
+    /// Get the first byte without advancing cursor.
+    ///
+    /// # Safety
+    ///
+    /// [`has_remaining()`][Self::has_remaining] must returns `true`.
+    #[inline]
+    pub const unsafe fn peek_unchecked(&self) -> u8 {
+        debug_assert!(self.has_remaining(), "safety violated, out of bounds");
+
+        // SAFETY: caller must ensure that there at least one remaining.
+        unsafe { *self.cursor }
+    }
+
     /// Try get the `n`-th byte without advancing cursor.
     ///
     /// the count starts from zero, so `nth(0)` returns the first value, `nth(1)` the second, and
     /// so on.
     #[inline]
     pub const fn peek_nth(&self, n: usize) -> Option<u8> {
-        if self.remaining() > n {
+        if n < self.remaining() {
             // SAFETY: `self.cursor` is valid until `n` forward
             Some(unsafe { *self.cursor.add(n) })
         } else {
             None
         }
+    }
+
+    /// Get the first byte without advancing cursor.
+    ///
+    /// # Safety
+    ///
+    /// `n` must be less than [`remaining()`][Self::has_remaining].
+    #[inline]
+    pub const unsafe fn peek_nth_unchecked(&self, n: usize) -> u8 {
+        debug_assert!(n < self.remaining(), "safety violated, out of bounds");
+
+        // SAFETY: caller must ensure that there at least `n` remaining.
+        unsafe { *self.cursor.add(n) }
     }
 
     /// Try get the first `N`-th bytes without advancing cursor.
@@ -213,11 +239,28 @@ impl<'a> Cursor<'a> {
             // SAFETY: `self.cursor` is still in bounds
             unsafe {
                 let val = *self.cursor;
-                self.advance(1);
+                self.advance_unchecked(1);
                 Some(val)
             }
         } else {
             None
+        }
+    }
+
+    /// Get the first byte and advance the cursor by `1`.
+    ///
+    /// # Safety
+    ///
+    /// [`has_remaining()`][Self::has_remaining] must returns `true`.
+    #[inline]
+    pub const unsafe fn next_unchecked(&mut self) -> u8 {
+        debug_assert!(self.has_remaining(), "safety violated, out of bounds");
+
+        // SAFETY: caller must ensure that there at least one remaining.
+        unsafe {
+            let val = *self.cursor;
+            self.advance_unchecked(1);
+            val
         }
     }
 
@@ -228,7 +271,7 @@ impl<'a> Cursor<'a> {
             // SAFETY: `self.cursor` is valid until `N` bytes
             unsafe {
                 let val = &*self.cursor.cast();
-                self.advance(N);
+                self.advance_unchecked(N);
                 Some(val)
             }
         } else {
@@ -243,9 +286,11 @@ impl<'a> Cursor<'a> {
     pub const fn prev(&mut self) -> Option<u8> {
         if self.steps() > 0 {
             // SAFETY: already advance once
-            let val = unsafe { *self.cursor.sub(1) };
-            self.step_back(1);
-            Some(val)
+            unsafe {
+                let val = *self.cursor.sub(1);
+                self.step_back_unchecked(1);
+                Some(val)
+            }
         } else {
             None
         }
@@ -255,9 +300,11 @@ impl<'a> Cursor<'a> {
     #[inline]
     pub const fn prev_chunk<const N: usize>(&mut self) -> Option<&'a [u8; N]> {
         if self.steps() >= N {
-            self.step_back(N);
             // SAFETY: already advanced `N`
-            Some(unsafe { &*self.cursor.cast() })
+            unsafe {
+                self.step_back_unchecked(N);
+                Some(&*self.cursor.cast())
+            }
         } else {
             None
         }
@@ -269,12 +316,25 @@ impl<'a> Cursor<'a> {
     ///
     /// # Panics
     ///
-    /// Panic if advancing pass slice length.
+    /// `n` must be less than or equal to [`remaining()`][Self::remaining], otherwise panic.
     #[inline]
     pub const fn advance(&mut self, n: usize) {
-        assert!(self.remaining() >= n, "Cursor::advance out of bounds");
+        assert!(n <= self.remaining(), "out of bounds");
 
         // SAFETY: asserted
+        unsafe { self.cursor = self.cursor.add(n); }
+    }
+
+    /// Advance cursor forward.
+    ///
+    /// # Safety
+    ///
+    /// `n` must be less than or equal to [`remaining()`][Self::remaining].
+    #[inline]
+    pub const unsafe fn advance_unchecked(&mut self, n: usize) {
+        debug_assert!(n <= self.remaining(), "safety violated, out of bounds");
+
+        // SAFETY: caller must ensure that `n` is in bounds
         unsafe { self.cursor = self.cursor.add(n); }
     }
 
@@ -286,16 +346,29 @@ impl<'a> Cursor<'a> {
         self.cursor = self.end;
     }
 
-    /// Move cursor backwards cursor.
+    /// Move cursor backwards.
     ///
     /// # Panics
     ///
     /// Panic if step back pass the first byte.
     #[inline]
     pub const fn step_back(&mut self, n: usize) {
-        assert!(self.steps() >= n, "Cursor::step_back out of bounds");
+        assert!(n <= self.steps(), "out of bounds");
 
         // SAFETY: assertion
+        unsafe { self.cursor = self.cursor.sub(n); }
+    }
+
+    /// Move cursor backwards.
+    ///
+    /// # Safety
+    ///
+    /// `n` must be less than or equal to [`steps()`][Self::steps].
+    #[inline]
+    pub const unsafe fn step_back_unchecked(&mut self, n: usize) {
+        debug_assert!(n <= self.steps(), "out of bounds");
+
+        // SAFETY: caller must ensure that that stepping back is in bound of the slice
         unsafe { self.cursor = self.cursor.sub(n); }
     }
 
