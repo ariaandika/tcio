@@ -5,7 +5,7 @@
 // INVARIANT: self.start <= self.cursor <= self.end
 //
 // note that even if `self.cursor == self.end`, dereferencing to slice would returns empty slice.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Cursor<'a> {
     /// Pointer to the start of the slice
     start: *const u8,
@@ -304,40 +304,6 @@ impl<'a> Cursor<'a> {
         if self.remaining() > len {
             self.end = unsafe { self.cursor.add(len) };
         }
-    }
-
-    // ===== Forking =====
-
-    /// Copy the internal state to a new [`Cursor`].
-    ///
-    /// This can be usefull for more complex peeking before advancing the cursor.
-    ///
-    /// When peeking complete, use [`Cursor::apply`] or [`Cursor::apply_to`] to apply the forked
-    /// state to the parent [`Cursor`].
-    #[inline]
-    pub const fn fork(&self) -> Cursor<'a> {
-        Cursor {
-            start: self.start,
-            cursor: self.cursor,
-            end: self.end,
-            _p: std::marker::PhantomData,
-        }
-    }
-
-    /// Apply other [`Cursor`] state to this [`Cursor`].
-    ///
-    /// This is intented to be used with [`Cursor::fork`] after completed peeking.
-    #[inline(always)]
-    pub const fn apply(&mut self, cursor: Cursor<'a>) {
-        *self = cursor;
-    }
-
-    /// Apply current state to other [`Cursor`].
-    ///
-    /// This is intented to be used with [`Cursor::fork`] after completed peeking.
-    #[inline(always)]
-    pub const fn apply_to(self, other: &mut Cursor<'a>) {
-        *other = self;
     }
 }
 
