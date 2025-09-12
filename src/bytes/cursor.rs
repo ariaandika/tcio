@@ -151,9 +151,12 @@ impl<'a> Cursor<'a> {
     }
 
     /// Try get the `n`-th byte without advancing cursor.
+    ///
+    /// the count starts from zero, so `nth(0)` returns the first value, `nth(1)` the second, and
+    /// so on.
     #[inline]
     pub const fn peek_nth(&self, n: usize) -> Option<u8> {
-        if self.remaining() >= n {
+        if self.remaining() > n {
             // SAFETY: `self.cursor` is valid until `n` forward
             Some(unsafe { *self.cursor.add(n) })
         } else {

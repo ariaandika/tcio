@@ -13,6 +13,8 @@ fn test_cursor_empty() {
     let mut cursor = Cursor::new(b"");
 
     assert_eq!(cursor.peek(), None);
+    assert_eq!(cursor.peek_nth(0), None);
+    assert_eq!(cursor.peek_nth(2), None);
     assert_eq!(cursor.peek_chunk::<0>(), Some(&[]));
     assert_eq!(cursor.peek_chunk::<2>(), None);
     assert_eq!(cursor.next(), None);
@@ -25,6 +27,8 @@ fn test_cursor_peek() {
     let mut cursor = Cursor::new(&BUF[..]);
 
     assert_eq!(cursor.peek(), BUF.first().copied());
+    assert_eq!(cursor.peek_nth(0), BUF.first().copied());
+    assert_eq!(cursor.peek_nth(2), Some(BUF[2]));
     assert_eq!(cursor.peek_chunk::<0>(), Some(&[]));
     assert_eq!(cursor.peek_chunk::<2>(), BUF.first_chunk::<2>());
     assert_eq!(cursor.peek_chunk::<BUF_LEN>(), Some(&BUF));
@@ -33,6 +37,8 @@ fn test_cursor_peek() {
     cursor.advance(BUF2_ADV);
 
     assert_eq!(cursor.peek(), BUF2.first().copied());
+    assert_eq!(cursor.peek_nth(0), BUF2.first().copied());
+    assert_eq!(cursor.peek_nth(2), Some(BUF2[2]));
     assert_eq!(cursor.peek_chunk::<0>(), Some(&[]));
     assert_eq!(cursor.peek_chunk::<2>(), BUF2.first_chunk::<2>());
     assert_eq!(cursor.peek_chunk::<BUF2_LEN>(), Some(&BUF2));
