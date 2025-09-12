@@ -308,6 +308,19 @@ impl<'a> Cursor<'a> {
             self.end = unsafe { self.cursor.add(len) };
         }
     }
+
+    /// Clone the cursor.
+    ///
+    /// This method exists for const context.
+    #[inline]
+    pub const fn fork(&self) -> Self {
+        Self {
+            start: self.start,
+            cursor: self.cursor,
+            end: self.end,
+            _p: std::marker::PhantomData,
+        }
+    }
 }
 
 impl<'a> From<&'a [u8]> for Cursor<'a> {
