@@ -58,6 +58,22 @@ fn test_cursor_next() {
 }
 
 #[test]
+fn test_cursor_truncate() {
+    let mut cursor = Cursor::new(&BUF[..]);
+
+    assert_eq!(cursor.as_slice(), &BUF[..]);
+    cursor.truncate(12);
+    assert_eq!(cursor.as_slice(), &BUF[..12]);
+
+    cursor.truncate(14);
+    assert_eq!(cursor.as_slice(), &BUF[..12]);
+
+    cursor.advance(2);
+    cursor.truncate(8);
+    assert_eq!(cursor.as_slice(), &BUF[2..2 + 8]);
+}
+
+#[test]
 fn test_cursor_prev() {
     let mut cursor = Cursor::new(&BUF[..]);
 
