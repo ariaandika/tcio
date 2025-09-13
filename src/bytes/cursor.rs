@@ -79,15 +79,6 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    /// Take current cursor to `len` of the slice.
-    ///
-    /// If `len` is more than slice length, the length is saturated.
-    #[inline]
-    pub const fn take(mut self, len: usize) -> Self {
-        self.truncate(len);
-        self
-    }
-
     // ===== Reference =====
 
     /// Returns how many [`Cursor`] has stepped forward.

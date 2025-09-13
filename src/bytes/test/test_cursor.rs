@@ -93,17 +93,3 @@ fn test_cursor_prev() {
     assert_eq!(cursor.peek_prev_chunk(), Some(&BUF));
     assert_eq!(cursor.peek_prev(), BUF.last().copied());
 }
-
-#[test]
-fn test_cursor_take() {
-    let mut cursor = Cursor::new(&BUF[..]).take(8);
-
-    assert_eq!(cursor.as_slice(), &BUF[..8]);
-
-    cursor.advance(3);
-    let remain = cursor.remaining();
-
-    let cursor = cursor.take(10);
-
-    assert_eq!(cursor.remaining(), remain);
-}
