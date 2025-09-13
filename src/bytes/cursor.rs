@@ -1,3 +1,5 @@
+use core::slice::from_raw_parts;
+
 /// Bytes cursor.
 ///
 /// This is intended to be used for interpreting bytes with unsafe unchecked bounds.
@@ -99,21 +101,21 @@ impl<'a> Cursor<'a> {
     #[inline]
     pub const fn original(&self) -> &'a [u8] {
         // SAFETY: invariant `self.start <= self.end`
-        unsafe { core::slice::from_raw_parts(self.start, self.end.offset_from_unsigned(self.start)) }
+        unsafe { from_raw_parts(self.start, self.end.offset_from_unsigned(self.start)) }
     }
 
     /// Returns reference to the already advanced slice.
     #[inline]
     pub const fn advanced_slice(&self) -> &'a [u8] {
         // SAFETY: invariant `self.cursor <= self.end`
-        unsafe { core::slice::from_raw_parts(self.start, self.steps()) }
+        unsafe { from_raw_parts(self.start, self.steps()) }
     }
 
     /// Returns reference to the remaining bytes.
     #[inline]
     pub const fn as_slice(&self) -> &'a [u8] {
         // SAFETY: invariant `self.cursor <= self.end`
-        unsafe { core::slice::from_raw_parts(self.cursor, self.remaining()) }
+        unsafe { from_raw_parts(self.cursor, self.remaining()) }
     }
 
     /// Returns the pointer this cursor point to.
@@ -409,6 +411,102 @@ impl<'a> Cursor<'a> {
             cursor: self.cursor,
             end: self.end,
             _p: std::marker::PhantomData,
+        }
+    }
+
+    // ===== Split =====
+
+    /// Returns the first and all the rest of the bytes.
+    ///
+    /// This can be used after cursor found a delimiter.
+    ///
+    /// # Safety
+    ///
+    /// Cursor must have at least one remaining bytes.
+    ///
+    /// If [`has_remaining`] returns `true`, this method is safe to call.
+    ///
+    /// [`has_remaining`]: Self::has_remaining
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::Cursor;
+    /// let mut cursor = Cursor::new(b"user:pass@example.com");
+    ///
+    /// while let Some(byte) = cursor.peek() {
+    ///     if byte == b'@' {
+    ///         break;
+    ///     } else {
+    ///         cursor.advance(1);
+    ///     }
+    /// }
+    ///
+    /// assert!(cursor.has_remaining());
+    ///
+    /// // SAFETY: `cursor.has_remaining()` returns `true`
+    /// let (delim, host) = unsafe { cursor.split_first() };
+    /// let userinfo = cursor.advanced_slice();
+    ///
+    /// assert_eq!(delim, b'@');
+    /// assert_eq!(userinfo, b"user:pass");
+    /// assert_eq!(host, b"example.com");
+    /// ```
+    pub const unsafe fn split_first(&self) -> (u8, &'a [u8]) {
+        debug_assert!(self.has_remaining());
+
+        // SAFETY: user must ensure that there is at least one remaining byte
+        unsafe {
+            let rest = self.cursor.add(1);
+            let rest_len = self.end.offset_from_unsigned(rest);
+
+            (*self.cursor, from_raw_parts(rest, rest_len))
+        }
+    }
+
+    /// Returns the last and all the rest of the advanced bytes.
+    ///
+    /// This can be used after cursor found a delimiter.
+    ///
+    /// # Safety
+    ///
+    /// Cursor must have at least one remaining bytes.
+    ///
+    /// If [`steps()`] does not returns `0`, this method is safe to call.
+    ///
+    /// [`steps()`]: Self::steps
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::Cursor;
+    /// let mut cursor = Cursor::new(b"user:pass@example.com");
+    ///
+    /// while let Some(byte) = cursor.next() {
+    ///     if byte == b'@' {
+    ///         break;
+    ///     }
+    /// }
+    ///
+    /// assert!(cursor.steps() != 0);
+    ///
+    /// // SAFETY: `cursor.steps()` does not returns `0`
+    /// let (delim, userinfo) = unsafe { cursor.split_last_advanced() };
+    /// let host = cursor.as_slice();
+    ///
+    /// assert_eq!(delim, b'@');
+    /// assert_eq!(userinfo, b"user:pass");
+    /// assert_eq!(host, b"example.com");
+    /// ```
+    pub const unsafe fn split_last_advanced(&self) -> (u8, &'a [u8]) {
+        debug_assert!(self.steps() != 0);
+
+        // SAFETY: user must ensure that cursor have advanced at least once
+        unsafe {
+            let at = self.cursor.sub(1);
+            let rest_len = at.offset_from_unsigned(self.start);
+
+            (*at, from_raw_parts(self.start, rest_len))
         }
     }
 }
