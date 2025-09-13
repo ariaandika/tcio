@@ -1,6 +1,6 @@
-/// Raw bytes cursor.
+/// Bytes cursor.
 ///
-/// Provides an API for interpreting bytes.
+/// This is intended to be used for interpreting bytes with unsafe unchecked bounds.
 //
 // INVARIANT: self.start <= self.cursor <= self.end
 //
@@ -17,7 +17,7 @@ pub struct Cursor<'a> {
 }
 
 impl<'a> Cursor<'a> {
-    /// Create new [`Cursor`] from an initialized buffer.
+    /// Creates new [`Cursor`] from initialized bytes.
     #[inline]
     pub const fn new(buf: &'a [u8]) -> Self {
         Self {
@@ -30,11 +30,11 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    /// Create new [`Cursor`] with starting cursor at the end of the buffer.
+    /// Creates new [`Cursor`] with starting cursor at the end of the buffer.
     ///
     /// Following [`next()`][Cursor::next] call will returns [`None`].
     ///
-    /// This is usefull when callers want to iterate backwards.
+    /// This is used when caller wants to iterate backwards.
     #[inline]
     pub const fn from_end(buf: &'a [u8]) -> Self {
         // SAFETY: allocated objects can never be larger than `isize::MAX` bytes,
@@ -49,9 +49,6 @@ impl<'a> Cursor<'a> {
     }
 
     /// Workaround for self referencing struct.
-    ///
-    /// The callers must not expose mutable reference of given buffer while `Cursor` is not yet
-    /// dropped.
     pub(crate) const fn new_unbound(buf: &[u8]) -> Self {
         Self {
             start: buf.as_ptr(),
@@ -64,9 +61,6 @@ impl<'a> Cursor<'a> {
     }
 
     /// Workaround for self referencing struct.
-    ///
-    /// The callers must not expose mutable reference of given buffer while `Cursor` is not yet
-    /// dropped.
     pub(crate) const fn from_end_unbound(buf: &[u8]) -> Self {
         // SAFETY: allocated objects can never be larger than `isize::MAX` bytes,
         // `self.cursor == self.end` is always safe
@@ -81,41 +75,41 @@ impl<'a> Cursor<'a> {
 
     // ===== Reference =====
 
-    /// Returns how many [`Cursor`] has stepped forward.
+    /// Returns how many cursor has stepped forward.
     #[inline]
     pub const fn steps(&self) -> usize {
         // SAFETY: invariant `self.start <= self.cursor`
         unsafe { self.cursor.offset_from_unsigned(self.start) }
     }
 
-    /// Returns the remaining bytes length.
+    /// Returns the remaining length of the bytes.
     #[inline]
     pub const fn remaining(&self) -> usize {
         // SAFETY: invariant `self.cursor <= self.end`
         unsafe { self.end.offset_from_unsigned(self.cursor) }
     }
 
-    /// Returns `true` if there is more bytes left.
+    /// Returns `true` if there is at least one remaining bytes.
     #[inline]
     pub const fn has_remaining(&self) -> bool {
         self.remaining() != 0
     }
 
-    /// Returns the original bytes.
+    /// Returns reference to the original bytes.
     #[inline]
     pub const fn original(&self) -> &'a [u8] {
         // SAFETY: invariant `self.start <= self.end`
         unsafe { core::slice::from_raw_parts(self.start, self.end.offset_from_unsigned(self.start)) }
     }
 
-    /// Returns the already advanced slice.
+    /// Returns reference to the already advanced slice.
     #[inline]
     pub const fn advanced_slice(&self) -> &'a [u8] {
         // SAFETY: invariant `self.cursor <= self.end`
         unsafe { core::slice::from_raw_parts(self.start, self.steps()) }
     }
 
-    /// Returns the remaining bytes.
+    /// Returns reference to the remaining bytes.
     #[inline]
     pub const fn as_slice(&self) -> &'a [u8] {
         // SAFETY: invariant `self.cursor <= self.end`
@@ -130,22 +124,32 @@ impl<'a> Cursor<'a> {
 
     // ===== Peek =====
 
-    /// Try get the first byte without advancing cursor.
+    /// Returns the next byte without advancing the cursor.
+    ///
+    /// Returns [`None`] if there is no remaining bytes.
     #[inline]
     pub const fn peek(&self) -> Option<u8> {
         if self.has_remaining() {
-            // SAFETY: start is still in bounds
-            Some(unsafe { *self.cursor })
+            // SAFETY: `has_remaining()` returns `true`
+            Some(unsafe { self.peek_unchecked() })
         } else {
             None
         }
     }
 
-    /// Get the first byte without advancing cursor.
+    /// Returns the next byte without advancing the cursor.
     ///
     /// # Safety
     ///
-    /// [`has_remaining()`][Self::has_remaining] must returns `true`.
+    /// Cursor must have at least one remaining bytes.
+    ///
+    /// This method is safe to call if one of the following conditions is met:
+    ///
+    /// - [`has_remaining()`] returns `true`
+    /// - [`remaining()`] returns more than or equal to `1`.
+    ///
+    /// [`has_remaining()`]: Self::has_remaining
+    /// [`remaining()`]: Self::remaining
     #[inline]
     pub const unsafe fn peek_unchecked(&self) -> u8 {
         debug_assert!(self.has_remaining(), "safety violated, out of bounds");
@@ -154,10 +158,12 @@ impl<'a> Cursor<'a> {
         unsafe { *self.cursor }
     }
 
-    /// Try get the `n`-th byte without advancing cursor.
+    /// Returns the next `n`-th byte without advancing the cursor.
     ///
-    /// the count starts from zero, so `nth(0)` returns the first value, `nth(1)` the second, and
-    /// so on.
+    /// Returns [`None`] if `n` is more than or equal to remaining bytes.
+    ///
+    /// The count starts from zero, so `peek_nth(0)` returns the first value, `peek_nth(1)` the
+    /// second, and so on.
     #[inline]
     pub const fn peek_nth(&self, n: usize) -> Option<u8> {
         if n < self.remaining() {
@@ -168,11 +174,11 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    /// Get the first byte without advancing cursor.
+    /// Returns the next `n`-th byte without advancing the cursor.
     ///
     /// # Safety
     ///
-    /// `n` must be less than [`remaining()`][Self::has_remaining].
+    /// `n` must be less than remaining bytes.
     #[inline]
     pub const unsafe fn peek_nth_unchecked(&self, n: usize) -> u8 {
         debug_assert!(n < self.remaining(), "safety violated, out of bounds");
@@ -181,10 +187,12 @@ impl<'a> Cursor<'a> {
         unsafe { *self.cursor.add(n) }
     }
 
-    /// Try get the first `N`-th bytes without advancing cursor.
+    /// Returns reference to the next `N` bytes without advancing the cursor.
+    ///
+    /// Returns [`None`] if `N` is more than remaining bytes.
     #[inline]
     pub const fn peek_chunk<const N: usize>(&self) -> Option<&'a [u8; N]> {
-        if self.remaining() >= N {
+        if N <= self.remaining() {
             // SAFETY: `self.cursor` is valid until `N` bytes
             Some(unsafe { &*self.cursor.cast() })
         } else {
@@ -192,10 +200,14 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    /// Try get the previous bytes without stepping back cursor.
+    // ===== Peek Prev =====
+
+    /// Returns the previous byte without stepping back the cursor.
+    ///
+    /// Returns [`None`] if cursor is at the beginning of the bytes.
     #[inline]
     pub const fn peek_prev(&self) -> Option<u8> {
-        if self.steps() > 0 {
+        if self.steps() != 0 {
             // SAFETY: already advance once
             Some(unsafe { *self.cursor.sub(1) })
         } else {
@@ -203,10 +215,12 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    /// Try get the previous `N`-th bytes without stepping back cursor.
+    /// Returns references to the previous `N` bytes without stepping back the cursor.
+    ///
+    /// Returns [`None`] if `N` is more than [`steps()`][Self::steps].
     #[inline]
     pub const fn peek_prev_chunk<const N: usize>(&self) -> Option<&'a [u8; N]> {
-        if self.steps() >= N {
+        if N <= self.steps() {
             // SAFETY: already advanced `N`-th
             Some(unsafe { &*self.cursor.sub(N).cast() })
         } else {
@@ -216,7 +230,9 @@ impl<'a> Cursor<'a> {
 
     // ===== Next =====
 
-    /// Try get the first byte and advance the cursor by `1`.
+    /// Returns the next byte and advance the cursor.
+    ///
+    /// Returns [`None`] if there is no remaining bytes.
     #[inline]
     #[allow(
         clippy::should_implement_trait,
@@ -227,22 +243,26 @@ impl<'a> Cursor<'a> {
         // so callers could be mistaken to call the blanket method from Iterator trait
 
         if self.has_remaining() {
-            // SAFETY: `self.cursor` is still in bounds
-            unsafe {
-                let val = *self.cursor;
-                self.advance_unchecked(1);
-                Some(val)
-            }
+            // SAFETY: `has_remaining()` returns `true`
+            Some(unsafe { self.next_unchecked() })
         } else {
             None
         }
     }
 
-    /// Get the first byte and advance the cursor by `1`.
+    /// Returns the next byte and advance the cursor.
     ///
     /// # Safety
     ///
-    /// [`has_remaining()`][Self::has_remaining] must returns `true`.
+    /// Cursor must have at least one remaining bytes.
+    ///
+    /// This method is safe to call if one of the following conditions is met:
+    ///
+    /// - [`has_remaining()`] returns `true`
+    /// - [`remaining()`] returns more than or equal to `1`.
+    ///
+    /// [`has_remaining()`]: Self::has_remaining
+    /// [`remaining()`]: Self::remaining
     #[inline]
     pub const unsafe fn next_unchecked(&mut self) -> u8 {
         debug_assert!(self.has_remaining(), "safety violated, out of bounds");
@@ -255,10 +275,12 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    /// Try get the first `N`-th bytes and advance the cursor by `N`.
+    /// Returns references to the next `N` bytes and advance the cursor by `N`.
+    ///
+    /// Returns [`None`] if `N` is more than remaining bytes.
     #[inline]
     pub const fn next_chunk<const N: usize>(&mut self) -> Option<&'a [u8; N]> {
-        if self.remaining() >= N {
+        if N <= self.remaining() {
             // SAFETY: `self.cursor` is valid until `N` bytes
             unsafe {
                 let val = &*self.cursor.cast();
@@ -272,25 +294,28 @@ impl<'a> Cursor<'a> {
 
     // ===== Prev =====
 
-    /// Try get the previous byte and step back the cursor by `1`.
+    /// Returns the previous byte and step back the cursor.
+    ///
+    /// Returns [`None`] if cursor is at the beginning of the bytes.
     #[inline]
     pub const fn prev(&mut self) -> Option<u8> {
-        if self.steps() > 0 {
+        if self.steps() != 0 {
             // SAFETY: already advance once
             unsafe {
-                let val = *self.cursor.sub(1);
                 self.step_back_unchecked(1);
-                Some(val)
+                Some(*self.cursor)
             }
         } else {
             None
         }
     }
 
-    /// Try get the previous `N`-th bytes and step back cursor by `N`.
+    /// Returns references to the previous `N` bytes and step back the cursor by `N`.
+    ///
+    /// Returns [`None`] if `N` is more than [`steps()`][Self::steps].
     #[inline]
     pub const fn prev_chunk<const N: usize>(&mut self) -> Option<&'a [u8; N]> {
-        if self.steps() >= N {
+        if N <= self.steps() {
             // SAFETY: already advanced `N`
             unsafe {
                 self.step_back_unchecked(N);
@@ -303,11 +328,11 @@ impl<'a> Cursor<'a> {
 
     // ===== Advance / Step Back =====
 
-    /// Advance cursor forward.
+    /// Advance cursor forward by `n`.
     ///
     /// # Panics
     ///
-    /// `n` must be less than or equal to [`remaining()`][Self::remaining], otherwise panic.
+    /// `n` must be less than or equal to remaining bytes, otherwise panic.
     #[inline]
     pub const fn advance(&mut self, n: usize) {
         assert!(n <= self.remaining(), "out of bounds");
@@ -316,11 +341,11 @@ impl<'a> Cursor<'a> {
         unsafe { self.cursor = self.cursor.add(n); }
     }
 
-    /// Advance cursor forward.
+    /// Advance cursor forward by `n`.
     ///
     /// # Safety
     ///
-    /// `n` must be less than or equal to [`remaining()`][Self::remaining].
+    /// `n` must be less than or equal to remaining bytes.
     #[inline]
     pub const unsafe fn advance_unchecked(&mut self, n: usize) {
         debug_assert!(n <= self.remaining(), "safety violated, out of bounds");
@@ -331,17 +356,17 @@ impl<'a> Cursor<'a> {
 
     /// Advance cursor to the end.
     ///
-    /// This is usefull when callers want to iterate backwards.
+    /// This is used when caller wants to iterate backwards.
     #[inline]
     pub const fn advance_to_end(&mut self) {
         self.cursor = self.end;
     }
 
-    /// Move cursor backwards.
+    /// Move cursor backwards by `n`.
     ///
     /// # Panics
     ///
-    /// Panic if step back pass the first byte.
+    /// `n` must be less than or equal to [`steps()`][Self::steps], otherwise panic.
     #[inline]
     pub const fn step_back(&mut self, n: usize) {
         assert!(n <= self.steps(), "out of bounds");
@@ -350,14 +375,14 @@ impl<'a> Cursor<'a> {
         unsafe { self.cursor = self.cursor.sub(n); }
     }
 
-    /// Move cursor backwards.
+    /// Move cursor backwards by `n`.
     ///
     /// # Safety
     ///
     /// `n` must be less than or equal to [`steps()`][Self::steps].
     #[inline]
     pub const unsafe fn step_back_unchecked(&mut self, n: usize) {
-        debug_assert!(n <= self.steps(), "out of bounds");
+        debug_assert!(n <= self.steps(), "safety violated, out of bounds");
 
         // SAFETY: caller must ensure that that stepping back is in bound of the slice
         unsafe { self.cursor = self.cursor.sub(n); }
@@ -365,10 +390,11 @@ impl<'a> Cursor<'a> {
 
     /// Take current cursor to `len` of the slice.
     ///
-    /// If `len` is more than slice length, the length is saturated.
+    /// If `len` is more than remaining bytes, this is a noop.
     #[inline]
     pub const fn truncate(&mut self, len: usize) {
-        if self.remaining() > len {
+        if len < self.remaining() {
+            // SAFETY: still in bounds of `self.cursor` and `self.end`
             self.end = unsafe { self.cursor.add(len) };
         }
     }
