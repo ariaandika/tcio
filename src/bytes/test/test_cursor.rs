@@ -93,3 +93,39 @@ fn test_cursor_prev() {
     assert_eq!(cursor.peek_prev_chunk(), Some(&BUF));
     assert_eq!(cursor.peek_prev(), BUF.last().copied());
 }
+
+#[test]
+fn test_cursor_split_first() {
+    let mut cursor = Cursor::new(&BUF[..]);
+
+    cursor.advance(BUF2_ADV);
+    assert!(cursor.has_remaining());
+
+    let (delim, rest) = unsafe { cursor.split_first() };
+
+    assert_eq!(delim, BUF2[0]);
+    assert_eq!(rest, &BUF2[1..]);
+
+    // last byte
+
+    cursor.advance(BUF2_LEN - 1);
+    assert_eq!(cursor.remaining(), 1);
+
+    let (delim, rest) = unsafe { cursor.split_first() };
+
+    assert_eq!(delim, *BUF2.last().unwrap());
+    assert_eq!(rest, &[]);
+}
+
+#[test]
+fn test_cursor_split_last_advanced() {
+    let mut cursor = Cursor::new(&BUF[..]);
+
+    cursor.advance(BUF2_ADV);
+    assert!(cursor.steps() != 0);
+
+    let (delim, rest) = unsafe { cursor.split_last_advanced() };
+
+    assert_eq!(delim, *BUF2_PREV.last().unwrap());
+    assert_eq!(rest, &BUF2_PREV[..BUF2_ADV - 1]);
+}
