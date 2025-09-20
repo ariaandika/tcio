@@ -133,6 +133,15 @@ impl Bytes {
     /// Shortens the buffer, keeping the first `len` bytes and dropping the rest.
     ///
     /// If `len` is greater or equal to the `BytesMut` length, this has no effect.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::Bytes;
+    /// let mut bytes = Bytes::copy_from_slice(b"Hello World!");
+    /// bytes.truncate(5);
+    /// assert_eq!(&bytes, &b"Hello"[..]);
+    /// ```
     #[inline]
     pub fn truncate(&mut self, len: usize) {
         if len < self.len {
@@ -150,6 +159,15 @@ impl Bytes {
     /// Shortens the buffer, dropping the last `len` bytes and keeping the rest.
     ///
     /// If `off` is greater to the `BytesMut` length, this has no effect.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::Bytes;
+    /// let mut bytes = Bytes::copy_from_slice(b"Hello World!");
+    /// bytes.truncate_off(7);
+    /// assert_eq!(&bytes, &b"Hello"[..]);
+    /// ```
     #[inline]
     pub fn truncate_off(&mut self, off: usize) {
         if let Some(new_len) = self.len.checked_sub(off) {
@@ -255,6 +273,15 @@ impl Bytes {
 
     /// Returns the shared subset of `Bytes` with given range.
     ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::Bytes;
+    /// let bytes = Bytes::copy_from_slice(b"Hello World!");
+    /// let slice = bytes.slice(6..);
+    /// assert_eq!(&slice, &b"World!"[..]);
+    /// ```
+    ///
     /// # Panics
     ///
     /// `range` should be in bounds of bytes capacity, otherwise panic.
@@ -319,6 +346,15 @@ impl Bytes {
 
     /// Returns the shared subset of `Bytes` with given slice.
     ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::Bytes;
+    /// let bytes = Bytes::copy_from_slice(b"Hello World!");
+    /// let slice = bytes.slice_ref(&bytes[6..]);
+    /// assert_eq!(&slice, &b"World!"[..]);
+    /// ```
+    ///
     /// # Panics
     ///
     /// `subset` should be contained in `Bytes` content, otherwise panic.
@@ -369,6 +405,16 @@ impl Bytes {
     /// elements `[at, capacity)`.
     ///
     /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::Bytes;
+    /// let mut bytes = Bytes::copy_from_slice(b"userinfo@example.com");
+    /// let split = bytes.split_off(8);
+    /// assert_eq!(&bytes, &b"userinfo"[..]);
+    /// assert_eq!(&split, &b"@example.com"[..]);
+    /// ```
     pub fn split_off(&mut self, at: usize) -> Self {
         let len = self.len;
 
@@ -397,6 +443,16 @@ impl Bytes {
     /// elements `[0, at)`.
     ///
     /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::Bytes;
+    /// let mut bytes = Bytes::copy_from_slice(b"userinfo@example.com");
+    /// let split = bytes.split_to(8);
+    /// assert_eq!(&split, &b"userinfo"[..]);
+    /// assert_eq!(&bytes, &b"@example.com"[..]);
+    /// ```
     pub fn split_to(&mut self, at: usize) -> Self {
         let len = self.len;
 

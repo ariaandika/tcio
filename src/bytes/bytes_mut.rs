@@ -151,6 +151,15 @@ impl BytesMut {
     /// Shortens the buffer, keeping the first `len` bytes and dropping the rest.
     ///
     /// If `len` is greater or equal to the `BytesMut` length, this has no effect.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::BytesMut;
+    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
+    /// bytes.truncate(8);
+    /// assert_eq!(bytes.as_slice(), b"userinfo");
+    /// ```
     #[inline]
     pub const fn truncate(&mut self, len: usize) {
         if len < self.len {
@@ -161,6 +170,15 @@ impl BytesMut {
     /// Shortens the buffer, dropping the last `len` bytes and keeping the rest.
     ///
     /// If `off` is greater or equal to the `BytesMut` length, this has no effect.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::BytesMut;
+    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
+    /// bytes.truncate_off(b"@example.com".len());
+    /// assert_eq!(bytes.as_slice(), b"userinfo");
+    /// ```
     #[inline]
     pub const fn truncate_off(&mut self, off: usize) {
         if let Some(new_len) = self.len.checked_sub(off) {
@@ -406,7 +424,7 @@ impl BytesMut {
 impl BytesMut {
     // ===== Read =====
 
-    /// Converts `self` into an immutable `Bytes`.
+    /// Converts `self` into an immutable [`Bytes`].
     #[inline]
     pub fn freeze(self) -> Bytes {
         match shared::as_unpromoted(self.data) {
@@ -426,6 +444,16 @@ impl BytesMut {
     /// the operation. This is identical to `self.split_to(self.len())`.
     ///
     /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::BytesMut;
+    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
+    /// let split = bytes.split();
+    /// assert!(bytes.is_empty());
+    /// assert_eq!(&split, &b"userinfo@example.com"[..]);
+    /// ```
     #[inline]
     pub fn split(&mut self) -> BytesMut {
         self.split_to(self.len)
@@ -437,6 +465,16 @@ impl BytesMut {
     /// elements `[0, at)`.
     ///
     /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::BytesMut;
+    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
+    /// let split = bytes.split_to(8);
+    /// assert_eq!(&split, &b"userinfo"[..]);
+    /// assert_eq!(&bytes, &b"@example.com"[..]);
+    /// ```
     #[inline]
     pub fn split_to(&mut self, at: usize) -> BytesMut {
         assert!(
@@ -461,11 +499,27 @@ impl BytesMut {
     /// elements `[0, ptr)`.
     ///
     /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::BytesMut;
+    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
+    /// let (lead, rest): (&[u8], &[u8]) = bytes.split_at(8);
+    ///
+    /// assert_eq!(lead, &b"userinfo"[..]);
+    /// assert_eq!(rest, &b"@example.com"[..]);
+    ///
+    /// let lead: BytesMut = bytes.split_to_ptr(rest.as_ptr());
+    ///
+    /// assert_eq!(&lead, &b"userinfo"[..]);
+    /// assert_eq!(&bytes, &b"@example.com"[..]);
+    /// ```
     #[inline]
     pub fn split_to_ptr(&mut self, ptr: *const u8) -> BytesMut {
-        match ptr.addr().checked_sub(self.ptr.addr().get()) {
-            Some(at) => self.split_to(at),
-            None => panic!("BytesMut::split_to_ptr out of bounds")
+        match ptr.addr().overflowing_sub(self.ptr.addr().get()) {
+            (at, false) => self.split_to(at),
+            (_, true) => panic!("split out of bounds")
         }
     }
 
@@ -475,6 +529,16 @@ impl BytesMut {
     /// elements `[at, capacity)`.
     ///
     /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::BytesMut;
+    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
+    /// let split = bytes.split_off(8);
+    /// assert_eq!(&bytes, &b"userinfo"[..]);
+    /// assert_eq!(&split, &b"@example.com"[..]);
+    /// ```
     #[inline]
     pub fn split_off(&mut self, at: usize) -> BytesMut {
         assert!(
@@ -499,6 +563,20 @@ impl BytesMut {
     /// elements `[ptr, capacity)`.
     ///
     /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::BytesMut;
+    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
+    /// let (lead, rest): (&[u8], &[u8]) = bytes.split_at(8);
+    /// assert_eq!(lead, &b"userinfo"[..]);
+    /// assert_eq!(rest, &b"@example.com"[..]);
+    ///
+    /// let rest: BytesMut = bytes.split_off_ptr(rest.as_ptr());
+    /// assert_eq!(&bytes, &b"userinfo"[..]);
+    /// assert_eq!(&rest, &b"@example.com"[..]);
+    /// ```
     #[inline]
     pub fn split_off_ptr(&mut self, ptr: *const u8) -> BytesMut {
         match ptr.addr().checked_sub(self.ptr.addr().get()) {
@@ -565,6 +643,15 @@ impl BytesMut {
     // ===== Write =====
 
     /// Copy and append bytes to the `BytesMut`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::BytesMut;
+    /// let mut bytes = BytesMut::copy_from_slice(&[1, 2, 3]);
+    /// bytes.extend_from_slice(&[4, 5, 6]);
+    /// assert_eq!(&bytes, &[1, 2, 3, 4, 5, 6])
+    /// ```
     #[inline]
     pub fn extend_from_slice(&mut self, extend: &[u8]) {
         let additional = extend.len();
@@ -587,6 +674,22 @@ impl BytesMut {
     /// decrease a reference count and sets few indices.
     ///
     /// Otherwise, it copies and append the bytes to the current `BytesMut`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::BytesMut;
+    /// let mut bytes = BytesMut::copy_from_slice(b"Hello World!");
+    /// let ptr = bytes.as_ptr();
+    /// let split = bytes.split_off(6);
+    ///
+    /// assert_eq!(&bytes, b"Hello ");
+    /// assert_eq!(&split, b"World!");
+    ///
+    /// bytes.unsplit(split);
+    /// assert_eq!(&bytes, &b"Hello World!"[..]);
+    /// assert_eq!(ptr, bytes.as_ptr());
+    /// ```
     pub fn unsplit(&mut self, other: BytesMut) {
         if self.is_empty() {
             *self = other;
@@ -710,6 +813,11 @@ crate::macros::partial_eq! {
     fn eq(self, other: Bytes) { <[u8]>::eq(self, other.as_slice()) }
 }
 
+impl<const N: usize> PartialEq<[u8; N]> for BytesMut {
+    fn eq(&self, other: &[u8; N]) -> bool {
+        self.as_slice() == other
+    }
+}
 
 impl Buf for BytesMut {
     #[inline]
