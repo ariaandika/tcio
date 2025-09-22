@@ -148,50 +148,6 @@ impl BytesMut {
         self.cap
     }
 
-    /// Shortens the buffer, keeping the first `len` bytes and dropping the rest.
-    ///
-    /// If `len` is greater or equal to the `BytesMut` length, this has no effect.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use tcio::bytes::BytesMut;
-    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
-    /// bytes.truncate(8);
-    /// assert_eq!(bytes.as_slice(), b"userinfo");
-    /// ```
-    #[inline]
-    pub const fn truncate(&mut self, len: usize) {
-        if len < self.len {
-            self.len = len;
-        }
-    }
-
-    /// Shortens the buffer, dropping the last `len` bytes and keeping the rest.
-    ///
-    /// If `off` is greater or equal to the `BytesMut` length, this has no effect.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use tcio::bytes::BytesMut;
-    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
-    /// bytes.truncate_off(b"@example.com".len());
-    /// assert_eq!(bytes.as_slice(), b"userinfo");
-    /// ```
-    #[inline]
-    pub const fn truncate_off(&mut self, off: usize) {
-        if let Some(new_len) = self.len.checked_sub(off) {
-            self.len = new_len;
-        }
-    }
-
-    /// Clears the `BytesMut`, removing all bytes.
-    #[inline]
-    pub const fn clear(&mut self) {
-        self.len = 0;
-    }
-
     /// Returns the bytes as a shared slice.
     #[inline]
     pub const fn as_slice(&self) -> &[u8] {
@@ -423,6 +379,82 @@ impl BytesMut {
 
 impl BytesMut {
     // ===== Read =====
+
+    /// Advance [`BytesMut`] to given pointer.
+    ///
+    /// # Examples
+    ///
+    /// This method is intended to be used with other API that returns a slice.
+    ///
+    /// ```
+    /// # use tcio::bytes::BytesMut;
+    /// # fn find_delimiter(b: &[u8]) -> &[u8] { &b[9..] }
+    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
+    /// let host: &[u8] = find_delimiter(bytes.as_slice());
+    /// // SAFETY: `find_delimiter` only returns slice within `bytes`
+    /// unsafe {
+    ///     bytes.advance_to_ptr(host.as_ptr())
+    /// }
+    /// assert_eq!(&bytes, &b"example.com"[..]);
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// - The distance between the pointers must be non-negative (`ptr >= self.ptr`)
+    ///
+    /// - *All* the safety conditions of pointer's `offset_from`
+    ///   apply to this method as well; see it for the full details.
+    #[inline]
+    pub unsafe fn advance_to_ptr(&mut self, ptr: *const u8) {
+        // SAFETY: caller ensure cnt <= self.len, and all `offset_from_unsigned
+        unsafe {
+            self.advance_unchecked(ptr.offset_from_unsigned(self.ptr.as_ptr()));
+        }
+    }
+
+    /// Shortens the buffer, keeping the first `len` bytes and dropping the rest.
+    ///
+    /// If `len` is greater or equal to the `BytesMut` length, this has no effect.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::BytesMut;
+    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
+    /// bytes.truncate(8);
+    /// assert_eq!(bytes.as_slice(), b"userinfo");
+    /// ```
+    #[inline]
+    pub const fn truncate(&mut self, len: usize) {
+        if len < self.len {
+            self.len = len;
+        }
+    }
+
+    /// Shortens the buffer, dropping the last `len` bytes and keeping the rest.
+    ///
+    /// If `off` is greater or equal to the `BytesMut` length, this has no effect.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::BytesMut;
+    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
+    /// bytes.truncate_off(b"@example.com".len());
+    /// assert_eq!(bytes.as_slice(), b"userinfo");
+    /// ```
+    #[inline]
+    pub const fn truncate_off(&mut self, off: usize) {
+        if let Some(new_len) = self.len.checked_sub(off) {
+            self.len = new_len;
+        }
+    }
+
+    /// Clears the `BytesMut`, removing all bytes.
+    #[inline]
+    pub const fn clear(&mut self) {
+        self.len = 0;
+    }
 
     /// Converts `self` into an immutable [`Bytes`].
     #[inline]

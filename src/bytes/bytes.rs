@@ -130,64 +130,6 @@ impl Bytes {
         unsafe { (self.vtable.is_unique)(&self.data) }
     }
 
-    /// Shortens the buffer, keeping the first `len` bytes and dropping the rest.
-    ///
-    /// If `len` is greater or equal to the `BytesMut` length, this has no effect.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use tcio::bytes::Bytes;
-    /// let mut bytes = Bytes::copy_from_slice(b"Hello World!");
-    /// bytes.truncate(5);
-    /// assert_eq!(&bytes, &b"Hello"[..]);
-    /// ```
-    #[inline]
-    pub fn truncate(&mut self, len: usize) {
-        if len < self.len {
-            if Vtable::is_shared(self.vtable) {
-                // this introduce "tail offset",
-                // which cannot be represented in unpromoted,
-                // thus required to be promoted
-                drop(self.split_off(len));
-            } else {
-                self.len = len;
-            }
-        }
-    }
-
-    /// Shortens the buffer, dropping the last `len` bytes and keeping the rest.
-    ///
-    /// If `off` is greater to the `BytesMut` length, this has no effect.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use tcio::bytes::Bytes;
-    /// let mut bytes = Bytes::copy_from_slice(b"Hello World!");
-    /// bytes.truncate_off(7);
-    /// assert_eq!(&bytes, &b"Hello"[..]);
-    /// ```
-    #[inline]
-    pub fn truncate_off(&mut self, off: usize) {
-        if let Some(new_len) = self.len.checked_sub(off) {
-            if Vtable::is_shared(self.vtable) {
-                // this introduce "tail offset",
-                // which cannot be represented in unpromoted,
-                // thus required to be promoted
-                drop(self.split_off(new_len));
-            } else {
-                self.len = new_len;
-            }
-        }
-    }
-
-    /// Clears the buffer, removing all values.
-    #[inline]
-    pub fn clear(&mut self) {
-        self.truncate(0);
-    }
-
     /// Extracts a slice containing the entire bytes.
     #[inline]
     pub const fn as_slice(&self) -> &[u8] {
@@ -256,20 +198,100 @@ impl Bytes {
     pub(crate) fn data(&self) -> &AtomicPtr<()> {
         &self.data
     }
-
-    /// # Safety
-    ///
-    /// `count <= self.len`
-    #[inline]
-    pub(crate) const unsafe fn advance_unchecked(&mut self, count: usize) {
-        debug_assert!(count <= self.len, "Bytes::advance_unchecked out of bounds");
-        self.len -= count;
-        self.ptr = unsafe { self.ptr.add(count) };
-    }
 }
 
 impl Bytes {
     // ===== Read =====
+
+    /// Advance [`Bytes`] to given pointer.
+    ///
+    /// # Examples
+    ///
+    /// This method is intended to be used with other API that returns a slice.
+    ///
+    /// ```
+    /// # use tcio::bytes::Bytes;
+    /// # fn find_delimiter(b: &[u8]) -> &[u8] { &b[9..] }
+    /// let mut bytes = Bytes::copy_from_slice(b"userinfo@example.com");
+    /// let host: &[u8] = find_delimiter(bytes.as_slice());
+    /// // SAFETY: `find_delimiter` only returns slice within `bytes`
+    /// unsafe {
+    ///     bytes.advance_to_ptr(host.as_ptr())
+    /// }
+    /// assert_eq!(&bytes, &b"example.com"[..]);
+    /// ```
+    ///
+    /// # Safety
+    ///
+    /// - The distance between the pointers must be non-negative (`ptr >= self.ptr`)
+    ///
+    /// - *All* the safety conditions of pointer's `offset_from`
+    ///   apply to this method as well; see it for the full details.
+    #[inline]
+    pub const unsafe fn advance_to_ptr(&mut self, ptr: *const u8) {
+        // SAFETY: caller ensure cnt <= self.len, and all `offset_from_unsigned
+        unsafe {
+            self.advance_unchecked(ptr.offset_from_unsigned(self.ptr));
+        }
+    }
+
+    /// Shortens the buffer, keeping the first `len` bytes and dropping the rest.
+    ///
+    /// If `len` is greater or equal to the `BytesMut` length, this has no effect.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::Bytes;
+    /// let mut bytes = Bytes::copy_from_slice(b"Hello World!");
+    /// bytes.truncate(5);
+    /// assert_eq!(&bytes, &b"Hello"[..]);
+    /// ```
+    #[inline]
+    pub fn truncate(&mut self, len: usize) {
+        if len < self.len {
+            if Vtable::is_shared(self.vtable) {
+                // this introduce "tail offset",
+                // which cannot be represented in unpromoted,
+                // thus required to be promoted
+                drop(self.split_off(len));
+            } else {
+                self.len = len;
+            }
+        }
+    }
+
+    /// Shortens the buffer, dropping the last `len` bytes and keeping the rest.
+    ///
+    /// If `off` is greater to the `BytesMut` length, this has no effect.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::Bytes;
+    /// let mut bytes = Bytes::copy_from_slice(b"Hello World!");
+    /// bytes.truncate_off(7);
+    /// assert_eq!(&bytes, &b"Hello"[..]);
+    /// ```
+    #[inline]
+    pub fn truncate_off(&mut self, off: usize) {
+        if let Some(new_len) = self.len.checked_sub(off) {
+            if Vtable::is_shared(self.vtable) {
+                // this introduce "tail offset",
+                // which cannot be represented in unpromoted,
+                // thus required to be promoted
+                drop(self.split_off(new_len));
+            } else {
+                self.len = new_len;
+            }
+        }
+    }
+
+    /// Clears the buffer, removing all values.
+    #[inline]
+    pub fn clear(&mut self) {
+        self.truncate(0);
+    }
 
     /// Returns the shared subset of `Bytes` with given range.
     ///
@@ -485,6 +507,19 @@ impl Bytes {
     #[inline]
     pub const fn cursor_mut(&mut self) -> CursorBuf<&mut Self> {
         CursorBuf::<&mut Self>::shared_mut(self)
+    }
+
+
+    // private
+
+    /// # Safety
+    ///
+    /// `count <= self.len`
+    #[inline]
+    pub(crate) const unsafe fn advance_unchecked(&mut self, count: usize) {
+        debug_assert!(count <= self.len, "safety violated, advanced out of bounds");
+        self.len -= count;
+        self.ptr = unsafe { self.ptr.add(count) };
     }
 }
 
