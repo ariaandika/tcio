@@ -65,10 +65,6 @@ h1_value:                                          [---------]
 
 This can be done by the facts that most protocol parsing result is immutable.
 
-## Cons
-
-`Bytes` have 4 words struct size, which is larger than `Vec<u8>` and `Arc<[u8]>`.
-
 ## Optimization
 
 ## Under the hood
