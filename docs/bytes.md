@@ -20,14 +20,15 @@ bytes.
 `Bytes` can represent only the subset of the actual allocated bytes.
 
 In contrast with `Vec<u8>`, if user wants to remove the leading bytes, the
-bytes requires to be copied and reallocated. But in `Bytes`, none of it is
+bytes requires to be copied and reallocated. But in `Bytes`, none of this
 happens.
 
 `Bytes::{advance, truncate, truncate_off}` provide an API to control the view
 bounds of the `Bytes`.
 
-Additionally, `Bytes` does not have double pointer indirection, in contrast
-with `Arc<[u8]>`. The pointer of the bytes stored directly in the struct.
+Additionally, `Bytes` does not introduce double pointer indirection, in
+contrast with `Arc<[u8]>`. The pointer of the bytes stored directly in the
+struct.
 
 ## Reference Counted
 
@@ -35,7 +36,7 @@ with `Arc<[u8]>`. The pointer of the bytes stored directly in the struct.
 view. Which means, cloning `Bytes` is cheap, `O(1)` operation.
 
 The lifetime of the heap allocation is managed with atomic reference counter.
-Thus, cloning only increment the counter, and when dropped, counter is
+Thus, cloning only increments the counter, and when dropped, counter is
 decremented. When the counter is 0, the heap memory is deallocated.
 
 ## Splitting
@@ -67,5 +68,14 @@ This can be done by the facts that most protocol parsing result is immutable.
 
 ## Optimization
 
-## Under the hood
+Reference counted data usually perform two allocation, the reference counter
+state, and the actual data. `Bytes` have an optimization where it does not
+allocate the reference counter state if it does not need to. The actual data
+pointer is stored directly in the struct.
+
+## Backgrounds
+
+This API is port from the popular `bytes` crate from the tokio team. The
+difference is that this version does not intent to cover all use cases,
+therefore it have different internal representation.
 
