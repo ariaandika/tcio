@@ -108,3 +108,20 @@ fn test_bytes_mut_unsplit() {
 
     bytes.try_unsplit(other).unwrap();
 }
+
+// Freeze
+
+#[test]
+fn test_bytes_mut_freeze() {
+    let bytes_mut = BytesMut::copy_from_slice(DATA);
+    let bytes = bytes_mut.freeze();
+    assert_eq!(bytes.as_slice(), DATA);
+}
+
+#[test]
+fn test_bytes_mut_promoted_freeze() {
+    let mut bytes_mut = BytesMut::copy_from_slice(DATA);
+    bytes_mut.split_to(0);
+    let bytes = bytes_mut.freeze();
+    assert_eq!(bytes.as_slice(), DATA);
+}

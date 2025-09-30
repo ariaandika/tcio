@@ -100,8 +100,9 @@ impl Bytes {
         }
     }
 
-    pub(crate) fn from_mut(shared: *mut Shared, mut bytesm: BytesMut) -> Self {
+    pub(crate) fn from_mut(shared: *mut Shared, bytesm: BytesMut) -> Self {
         debug_assert!(shared::is_promoted(shared));
+        let mut bytesm = ManuallyDrop::new(bytesm);
         Bytes {
             ptr: bytesm.as_mut_ptr(),
             len: bytesm.len(),
