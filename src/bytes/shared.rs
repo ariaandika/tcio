@@ -53,27 +53,11 @@ pub fn as_unpromoted<'a>(data: *const Shared) -> Result<usize, &'a Shared> {
     }
 }
 
-pub fn as_unpromoted_raw<'a>(data: *mut Shared) -> Result<*mut Shared, &'a mut Shared> {
-    if is_unpromoted(data) {
-        Ok(data)
-    } else {
-        Err(unsafe { &mut *data })
-    }
-}
-
 pub fn as_unpromoted_mut<'a>(data: *mut Shared) -> Result<usize, &'a mut Shared> {
     if is_unpromoted(data) {
         Ok(data as usize >> RESERVED_BIT_DATA)
     } else {
         Err(unsafe { &mut *data })
-    }
-}
-
-pub fn into_unpromoted_raw(data: *mut Shared) -> Result<*mut Shared, Box<Shared>> {
-    if is_unpromoted(data) {
-        Ok(data)
-    } else {
-        Err(unsafe { Box::from_raw(data) })
     }
 }
 
@@ -86,15 +70,6 @@ pub fn into_unpromoted(data: *mut Shared) -> Result<usize, Box<Shared>> {
 }
 
 // ===== Unpromoted =====
-
-/// Returns `true` if the least significant bit is set.
-///
-/// `Shared` requires such condition to denote unpromoted buffer.
-pub fn is_payload_compliance(value: usize) -> bool {
-    const LSB: usize = 0b1;
-
-    value & LSB == LSB
-}
 
 /// Mask the arbitrary payload with `usize`.
 ///

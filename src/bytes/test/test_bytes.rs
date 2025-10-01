@@ -1,4 +1,4 @@
-use crate::bytes::{Buf, Bytes, BytesMut};
+use crate::bytes::{Bytes, BytesMut};
 
 /// NOTE: Vector with excess capacity will create Bytes in promoted state
 macro_rules! vec_excess {
