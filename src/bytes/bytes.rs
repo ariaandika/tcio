@@ -407,7 +407,7 @@ impl Bytes {
 
         let data = *self.data.get_mut();
 
-        if let Ok(offset) = shared::as_unpromoted(data) {
+        if let Some(offset) = shared::to_unpromoted(data) {
             *self.data.get_mut() = shared::mask_payload(data, offset + count);
         }
 

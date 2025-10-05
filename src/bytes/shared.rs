@@ -45,11 +45,25 @@ pub fn is_promoted(data: *const Shared) -> bool {
     data as usize & DATA_MASK == DATA_PROMOTED
 }
 
+/// Pointer cannot be null.
+///
+/// To skip pointer null check, use [`to_unpromoted`].
 pub fn as_unpromoted<'a>(data: *const Shared) -> Result<usize, &'a Shared> {
     if is_unpromoted(data) {
         Ok(data as usize >> RESERVED_BIT_DATA)
     } else {
+        debug_assert!(!data.is_null());
         Err(unsafe { &*data })
+    }
+}
+
+/// In contrast with [`as_unpromoted`], the pointer may be null because it will not be
+/// dereferenced.
+pub fn to_unpromoted(data: *const Shared) -> Option<usize> {
+    if is_unpromoted(data) {
+        Some(data as usize >> RESERVED_BIT_DATA)
+    } else {
+        None
     }
 }
 
