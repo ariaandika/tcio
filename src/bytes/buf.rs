@@ -26,7 +26,7 @@ pub trait Buf {
         }
     }
 
-    /// Returns `true` if there is no more bytes remaining.
+    /// Returns `true` if there is bytes remaining.
     fn has_remaining(&self) -> bool {
         self.remaining() > 0
     }
@@ -36,15 +36,9 @@ pub trait Buf {
     /// Specific implementation can optimize this by, for example, just increasing reference count,
     /// preventing copy.
     fn copy_to_bytes(&mut self, len: usize) -> super::Bytes {
-        if self.remaining() < len {
-            panic!(
-                "cannot get `{len}` bytes, only `{}` is remaining",
-                self.remaining()
-            )
-        }
-
+        let chunk = &self.chunk()[..len];
         let mut b = super::BytesMut::with_capacity(len);
-        b.extend_from_slice(&self.chunk()[..len]);
+        b.extend_from_slice(chunk);
         b.freeze()
     }
 }
@@ -62,13 +56,6 @@ impl Buf for &[u8] {
 
     #[inline]
     fn advance(&mut self, cnt: usize) {
-        if self.len() < cnt {
-            panic!(
-                "cannot get `{cnt}` bytes, only `{}` is remaining",
-                self.len()
-            )
-        }
-
         *self = &self[cnt..];
     }
 }
