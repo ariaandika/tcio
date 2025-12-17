@@ -787,3 +787,20 @@ crate::macros::partial_eq! {
     fn eq(self, other: Self) { <[u8]>::eq(self, other.as_slice()) }
     fn eq(self, other: BytesMut) { <[u8]>::eq(self, other.as_slice()) }
 }
+
+impl super::Buf for Bytes {
+    #[inline]
+    fn remaining(&self) -> usize {
+        self.len()
+    }
+
+    #[inline]
+    fn chunk(&self) -> &[u8] {
+        self
+    }
+
+    #[inline]
+    fn advance(&mut self, cnt: usize) {
+        Self::advance(self, cnt);
+    }
+}
