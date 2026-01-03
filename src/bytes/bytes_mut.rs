@@ -341,10 +341,9 @@ impl BytesMut {
 
                             return true;
                         }
-                    } else {
-                        // cannot reclaim, and `!allocate`
-                        return false;
                     }
+
+                    // give up reclaiming, try to reallocate
                 }
 
                 if !allocate {
