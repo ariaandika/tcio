@@ -17,6 +17,7 @@ mod bytes_mut;
 mod bytestr;
 mod cursor;
 mod cursor_buf;
+mod take;
 
 pub use buf::Buf;
 pub use buf_mut::BufMut;
@@ -25,6 +26,7 @@ pub use bytes_mut::BytesMut;
 pub use bytestr::ByteStr;
 pub use cursor::Cursor;
 pub use cursor_buf::CursorBuf;
+pub use take::Take;
 
 pub mod error {
     //! Error types.
