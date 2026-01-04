@@ -1,6 +1,8 @@
-use std::{fmt, io, pin::Pin};
+use std::fmt;
+use std::io;
+use std::pin::Pin;
 
-use crate::Either;
+use crate::either::Either;
 
 /// Represent either type that implement the same trait.
 ///

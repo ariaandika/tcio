@@ -1,4 +1,4 @@
-//! Futures utilities.
+//! Provide utilities for working with [`Future`].
 mod map;
 mod then;
 

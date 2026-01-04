@@ -1,4 +1,4 @@
-//! Asynchronous io.
+//! Provide utilities for working with asynchronous IO.
 mod read;
 mod write;
 mod bufread;

@@ -1,4 +1,4 @@
-//! Formatting utilities.
+//! Provide utilities for formatting.
 
 /// Lossy [`Debug`] and [`Display`] implementation of `[u8]`.
 ///

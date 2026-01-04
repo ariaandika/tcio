@@ -1,4 +1,4 @@
-//! Utilities for working with bytes.
+//! Provide utilities for working with bytes.
 //!
 //! Overview:
 //!
