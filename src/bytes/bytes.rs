@@ -796,11 +796,16 @@ impl super::Buf for Bytes {
 
     #[inline]
     fn chunk(&self) -> &[u8] {
-        self
+        self.as_slice()
     }
 
     #[inline]
     fn advance(&mut self, cnt: usize) {
         Self::advance(self, cnt);
+    }
+
+    #[inline]
+    fn copy_to_bytes(&mut self, len: usize) -> Bytes {
+        self.split_to(len)
     }
 }

@@ -892,13 +892,39 @@ impl super::BufMut for BytesMut {
         if self.capacity() == self.len() {
             self.reserve(64);
         }
-
         self.spare_capacity_mut()
     }
 
     #[inline]
     unsafe fn advance_mut(&mut self, cnt: usize) {
         unsafe { self.set_len(self.len() + cnt) };
+    }
+
+    fn put<T: Buf>(&mut self, mut src: T)
+    where
+        Self: Sized,
+    {
+        if !src.has_remaining() {
+            // prevent calling `copy_to_bytes`->`put`->`copy_to_bytes` infintely when src is empty
+
+        } else if self.capacity() == 0 {
+            // When capacity is zero, try reusing allocation of `src`.
+            let src_copy = src.copy_to_bytes(src.remaining());
+            drop(src);
+            if src_copy.is_unique() {
+                *self = src_copy.into_mut();
+            } else {
+                self.extend_from_slice(&src_copy)
+            }
+        } else {
+            self.reserve(src.remaining());
+            while src.has_remaining() {
+                let s = src.chunk();
+                let l = s.len();
+                self.extend_from_slice(s);
+                src.advance(l);
+            }
+        }
     }
 
     #[inline]
