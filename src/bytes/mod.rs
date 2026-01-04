@@ -7,7 +7,6 @@
 //! - [`Bytes`] is a reference counted shared memory buffer.
 //! - [`ByteStr`] is a `Bytes` that contains valid UTF-8.
 //! - [`BytesMut`] is a splitable in memory buffer.
-//! - [`Cursor`] track a position in a memory buffer.
 mod shared;
 
 mod buf;
@@ -15,8 +14,6 @@ mod buf_mut;
 mod bytes;
 mod bytes_mut;
 mod bytestr;
-mod cursor;
-mod cursor_buf;
 mod take;
 mod chain;
 
@@ -25,8 +22,6 @@ pub use buf_mut::BufMut;
 pub use bytes::Bytes;
 pub use bytes_mut::BytesMut;
 pub use bytestr::ByteStr;
-pub use cursor::Cursor;
-pub use cursor_buf::CursorBuf;
 pub use take::Take;
 pub use chain::Chain;
 

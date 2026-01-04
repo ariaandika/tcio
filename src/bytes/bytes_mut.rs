@@ -1,14 +1,11 @@
-use std::{
-    cmp,
-    mem::{ManuallyDrop, MaybeUninit},
-    ptr::{self, NonNull},
-    slice,
-};
+use std::cmp;
+use std::mem::{ManuallyDrop, MaybeUninit};
+use std::ptr::{self, NonNull};
+use std::slice;
 
-use super::{
-    Buf, Bytes, Cursor, CursorBuf,
-    shared::{self, Shared},
-};
+use super::Buf;
+use super::Bytes;
+use super::shared::{self, Shared};
 
 // BytesMut is a unique `&mut [u8]` over a shared heap allocated `[u8]`
 //
@@ -614,18 +611,6 @@ impl BytesMut {
             Some(at) => self.split_off(at),
             None => panic!("BytesMut::split_off_ptr out of bounds")
         }
-    }
-
-    /// Create new [`CursorBuf`] from current `BytesMut`.
-    #[inline]
-    pub const fn cursor(&self) -> Cursor<'_> {
-        Cursor::new(self.as_slice())
-    }
-
-    /// Create new mutable [`CursorBuf`] from current buffer.
-    #[inline]
-    pub const fn cursor_mut(&mut self) -> CursorBuf<&mut Self> {
-        CursorBuf::<&mut Self>::shared_mut(self)
     }
 
     /// # Safety

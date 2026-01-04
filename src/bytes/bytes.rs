@@ -1,14 +1,10 @@
-use std::{
-    mem::{self, ManuallyDrop},
-    ptr::{self, NonNull},
-    slice,
-    sync::atomic::{AtomicPtr, Ordering},
-};
+use std::mem::{self, ManuallyDrop};
+use std::ptr::{self, NonNull};
+use std::slice;
+use std::sync::atomic::{AtomicPtr, Ordering};
 
-use super::{
-    BytesMut, Cursor, CursorBuf,
-    shared::{self, Shared},
-};
+use super::BytesMut;
+use super::shared::{self, Shared};
 
 /// A cheaply cloneable and sliceable chunk of contiguous memory.
 pub struct Bytes {
@@ -100,18 +96,6 @@ impl Bytes {
             len: bytesm.len(),
             data: AtomicPtr::new(shared),
         }
-    }
-
-    /// Create new [`Cursor`] from current `Bytes`.
-    #[inline]
-    pub const fn cursor(&self) -> Cursor<'_> {
-        Cursor::new(self.as_slice())
-    }
-
-    /// Create new mutable [`CursorBuf`] from current buffer.
-    #[inline]
-    pub const fn cursor_mut(&mut self) -> CursorBuf<&mut Self> {
-        CursorBuf::<&mut Self>::shared_mut(self)
     }
 }
 
