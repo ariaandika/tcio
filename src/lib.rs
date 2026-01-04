@@ -31,7 +31,6 @@ pub mod bytes;
 pub mod futures;
 pub mod io;
 pub mod fmt;
-pub mod sync;
 
 #[cfg(feature = "tokio")]
 pub mod tokio;
