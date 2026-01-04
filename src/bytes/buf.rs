@@ -1,6 +1,6 @@
 use std::io::IoSlice;
 
-use crate::bytes::take::Take;
+use crate::bytes::{Take, Chain};
 
 /// Read bytes from a buffer.
 ///
@@ -146,6 +146,17 @@ pub trait Buf {
         Self: Sized,
     {
         Take::new(self, limit)
+    }
+
+    /// Creates an adaptor which will chain this buffer with another.
+    ///
+    /// The returned `Buf` instance will first consume all bytes from `self`. Afterwards the output
+    /// is equivalent to the output of next.
+    fn chain<U: Buf>(self, next: U) -> Chain<Self, U>
+    where
+        Self: Sized,
+    {
+        Chain::new(self, next)
     }
 }
 

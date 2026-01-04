@@ -1,6 +1,8 @@
 use core::mem::{self, MaybeUninit};
 use core::ptr;
 
+use crate::bytes::Chain;
+
 /// A trait for values that provide sequential write access to bytes.
 ///
 /// Write bytes to a buffer
@@ -126,17 +128,17 @@ pub trait BufMut {
         }
     }
 
-    // /// Creates an adapter which will chain this buffer with another.
-    // ///
-    // /// The returned `BufMut` instance will first write to all bytes from
-    // /// `self`. Afterwards, it will write to `next`.
-    // #[inline]
-    // fn chain_mut<U: BufMut>(self, next: U) -> Chain<Self, U>
-    // where
-    //     Self: Sized,
-    // {
-    //     Chain::new(self, next)
-    // }
+    /// Creates an adapter which will chain this buffer with another.
+    ///
+    /// The returned `BufMut` instance will first write to all bytes from `self`. Afterwards, it
+    /// will write to `next`.
+    #[inline]
+    fn chain_mut<U: BufMut>(self, next: U) -> Chain<Self, U>
+    where
+        Self: Sized,
+    {
+        Chain::new(self, next)
+    }
 }
 
 /// This macro make sure to forward ALL methods which may be overriden by the implementor.

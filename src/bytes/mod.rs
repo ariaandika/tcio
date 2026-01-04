@@ -18,6 +18,7 @@ mod bytestr;
 mod cursor;
 mod cursor_buf;
 mod take;
+mod chain;
 
 pub use buf::Buf;
 pub use buf_mut::BufMut;
@@ -27,6 +28,7 @@ pub use bytestr::ByteStr;
 pub use cursor::Cursor;
 pub use cursor_buf::CursorBuf;
 pub use take::Take;
+pub use chain::Chain;
 
 pub mod error {
     //! Error types.
