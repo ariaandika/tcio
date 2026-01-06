@@ -1,11 +1,7 @@
 //! Provide utilities for working with asynchronous IO.
-mod read;
-mod write;
-mod bufread;
-mod cursor;
+mod io_read;
+mod io_write;
 
-pub use read::{AsyncIoRead, poll_read_fn};
-pub use write::AsyncIoWrite;
-pub use bufread::{AsyncBufRead, BufReader};
-pub use cursor::BufCursor;
+pub use io_read::{AsyncIoRead, poll_read_fn};
+pub use io_write::AsyncIoWrite;
 

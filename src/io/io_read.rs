@@ -8,11 +8,11 @@ use std::{
 /// how many bytes were read.
 pub fn poll_read_fn<B>(
     poll: impl FnOnce(&mut [u8], &mut std::task::Context) -> Poll<io::Result<usize>>,
-    buf: &mut B,
+    mut buf: B,
     cx: &mut std::task::Context,
 ) -> Poll<io::Result<usize>>
 where
-    B: BufMut + ?Sized,
+    B: BufMut,
 {
     if !buf.has_remaining_mut() {
         return Poll::Ready(Ok(0));
@@ -34,7 +34,7 @@ where
     Poll::Ready(Ok(read))
 }
 
-/// Asynchronous io read operation.
+/// Reads bytes from an IO source.
 pub trait AsyncIoRead {
     /// Polls for read readiness.
     fn poll_read_ready(&self, cx: &mut std::task::Context) -> Poll<io::Result<()>>;
@@ -51,15 +51,14 @@ pub trait AsyncIoRead {
     /// read.
     ///
     /// Returns [`Poll::Pending`] if the underlying stream not ready for reading.
-    fn poll_read(
-        &self,
-        buf: &mut [u8],
-        cx: &mut std::task::Context,
-    ) -> Poll<io::Result<usize>> {
+    fn poll_read(&self, buf: &mut [u8], cx: &mut std::task::Context) -> Poll<io::Result<usize>> {
         match self.try_read(buf) {
             Ok(read) => Poll::Ready(Ok(read)),
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
-                tri!(ready!(self.poll_read_ready(cx)));
+                match ready!(self.poll_read_ready(cx)) {
+                    Ok(ok) => ok,
+                    Err(err) => return Poll::Ready(Err(err)),
+                };
                 self.poll_read(buf, cx)
             }
             Err(err) => Poll::Ready(Err(err)),
@@ -70,11 +69,11 @@ pub trait AsyncIoRead {
     /// returning how many bytes were read.
     fn poll_read_buf<B>(
         &self,
-        buf: &mut B,
+        mut buf: B,
         cx: &mut std::task::Context,
     ) -> Poll<io::Result<usize>>
     where
-        B: BufMut + ?Sized,
+        B: BufMut,
     {
         if !buf.has_remaining_mut() {
             return Poll::Ready(Ok(0));
@@ -110,9 +109,9 @@ pub trait AsyncIoRead {
     #[inline]
     fn read_buf<B>(&self, buf: &mut B) -> impl Future<Output = io::Result<usize>>
     where
-        B: BufMut + ?Sized,
+        B: BufMut,
     {
-        std::future::poll_fn(|cx| self.poll_read_buf(buf, cx))
+        std::future::poll_fn(|cx| self.poll_read_buf(&mut *buf, cx))
     }
 }
 
