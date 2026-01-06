@@ -231,6 +231,13 @@ impl Buf for &[u8] {
         dst.copy_from_slice(&self[..dst.len()]);
         self.advance(dst.len());
     }
+
+    #[inline]
+    fn copy_to_bytes(&mut self, len: usize) -> super::Bytes {
+        let (a, b) = self.split_at(len);
+        *self = b;
+        super::Bytes::copy_from_slice(a)
+    }
 }
 
 // assert Buf is dyn compatible.
