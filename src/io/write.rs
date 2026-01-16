@@ -40,7 +40,7 @@ pub trait AsyncWrite {
     /// If the object is not ready for writing, the method returns `Poll::Pending` and arranges for
     /// the current task (via `cx.waker()`) to receive a notification when the object becomes
     /// writable or is closed.
-    fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>>;
+    fn poll_write(self: Pin<&mut Self>, buf: &[u8], cx: &mut Context) -> Poll<io::Result<usize>>;
 
     /// Attempts to flush the object, ensuring that any buffered data reach their destination.
     ///
@@ -128,14 +128,14 @@ pub trait AsyncWrite {
     /// [`poll_write`]: AsyncWrite::poll_write
     fn poll_write_vectored(
         self: Pin<&mut Self>,
-        cx: &mut Context,
         bufs: &[IoSlice],
+        cx: &mut Context,
     ) -> Poll<io::Result<usize>> {
         let buf = bufs
             .iter()
             .find(|b| !b.is_empty())
             .map_or(&[][..], |b| &**b);
-        self.poll_write(cx, buf)
+        self.poll_write(buf, cx)
     }
 
     /// Determines if this writer has an efficient [`poll_write_vectored`] implementation.
@@ -150,10 +150,54 @@ pub trait AsyncWrite {
     fn is_write_vectored(&self) -> bool {
         false
     }
+
+    /// Like [`poll_write`], except that it accepts instance of [`Buf`].
+    ///
+    /// `buf` will be advanced by the number of written bytes.
+    ///
+    /// [`poll_write`]: AsyncWrite::poll_write
+    /// [`Buf`]: crate::bytes::Buf
+    fn poll_write_buf(
+        self: Pin<&mut Self>,
+        mut buf: impl crate::bytes::Buf,
+        cx: &mut Context,
+    ) -> Poll<io::Result<()>> {
+        match self.poll_write(buf.chunk(), cx) {
+            Poll::Ready(Ok(write)) => {
+                buf.advance(write);
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+
+    /// Like [`poll_write_vectored`], except that it accepts instance of [`Buf`].
+    ///
+    /// `buf` will be advanced by the number of written bytes.
+    ///
+    /// [`poll_write_vectored`]: AsyncWrite::poll_write_vectored
+    /// [`Buf`]: crate::bytes::Buf
+    fn poll_write_buf_vectored(
+        self: Pin<&mut Self>,
+        mut buf: impl crate::bytes::Buf,
+        cx: &mut Context,
+    ) -> Poll<io::Result<()>> {
+        let mut io_slice = [IoSlice::new(&[]); 64];
+        let cnt = buf.chunks_vectored(&mut io_slice);
+        match self.poll_write_vectored(&io_slice[..cnt], cx) {
+            Poll::Ready(Ok(write)) => {
+                buf.advance(write);
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
+            Poll::Pending => Poll::Pending,
+        }
+    }
 }
 
 impl AsyncWrite for &mut [u8] {
-    fn poll_write(self: Pin<&mut Self>, _: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
+    fn poll_write(self: Pin<&mut Self>, buf: &[u8], _: &mut Context) -> Poll<io::Result<usize>> {
         let me = self.get_mut();
         let cnt = me.len().min(buf.len());
         let (a, b) = std::mem::take(me).split_at_mut(cnt);
@@ -172,7 +216,7 @@ impl AsyncWrite for &mut [u8] {
 }
 
 impl AsyncWrite for Vec<u8> {
-    fn poll_write(self: Pin<&mut Self>, _: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
+    fn poll_write(self: Pin<&mut Self>, buf: &[u8], _: &mut Context) -> Poll<io::Result<usize>> {
         self.get_mut().extend_from_slice(buf);
         Poll::Ready(Ok(buf.len()))
     }
@@ -187,8 +231,8 @@ impl AsyncWrite for Vec<u8> {
 }
 
 impl<T: AsyncWrite + Unpin + ?Sized> AsyncWrite for &mut T {
-    fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
-        T::poll_write(Pin::new(self.get_mut()), cx, buf)
+    fn poll_write(self: Pin<&mut Self>, buf: &[u8], cx: &mut Context) -> Poll<io::Result<usize>> {
+        T::poll_write(Pin::new(self.get_mut()), buf, cx)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
@@ -201,8 +245,8 @@ impl<T: AsyncWrite + Unpin + ?Sized> AsyncWrite for &mut T {
 }
 
 impl<T: AsyncWrite + Unpin + ?Sized> AsyncWrite for Box<T> {
-    fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
-        T::poll_write(Pin::new(self.get_mut()), cx, buf)
+    fn poll_write(self: Pin<&mut Self>, buf: &[u8], cx: &mut Context) -> Poll<io::Result<usize>> {
+        T::poll_write(Pin::new(self.get_mut()), buf, cx)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
@@ -219,8 +263,8 @@ where
     T: std::ops::DerefMut,
     T::Target: AsyncWrite,
 {
-    fn poll_write(self: Pin<&mut Self>, cx: &mut Context, buf: &[u8]) -> Poll<io::Result<usize>> {
-        T::Target::poll_write(Pin::as_deref_mut(self), cx, buf)
+    fn poll_write(self: Pin<&mut Self>, buf: &[u8], cx: &mut Context) -> Poll<io::Result<usize>> {
+        T::Target::poll_write(Pin::as_deref_mut(self), buf, cx)
     }
 
     fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
@@ -244,8 +288,8 @@ mod tokio_io {
     impl AsyncWrite for TcpStream {
         fn poll_write(
             self: Pin<&mut Self>,
-            cx: &mut Context,
             buf: &[u8],
+            cx: &mut Context,
         ) -> Poll<io::Result<usize>> {
             TokioWrite::poll_write(self, cx, buf)
         }
@@ -267,8 +311,8 @@ mod tokio_io {
         impl AsyncWrite for UnixStream {
             fn poll_write(
                 self: Pin<&mut Self>,
-                cx: &mut Context,
                 buf: &[u8],
+                cx: &mut Context,
             ) -> Poll<io::Result<usize>> {
                 TokioWrite::poll_write(self, cx, buf)
             }
