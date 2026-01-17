@@ -172,6 +172,29 @@ pub trait AsyncWrite {
         }
     }
 
+    /// Attempts to write an entire buffer into this writer.
+    ///
+    /// This method will continuously call [`poll_write`] until there is no more data to be
+    /// written. The first error that is generated from this method will be returned.
+    ///
+    /// If the buffer contains no data, this will never call [`poll_write`].
+    ///
+    /// # Errors
+    ///
+    /// This function will return the first error that [`poll_write`] returns.
+    ///
+    /// [`poll_write`]: AsyncWrite::poll_write
+    fn poll_write_all_buf(
+        mut self: Pin<&mut Self>,
+        mut buf: impl crate::bytes::Buf,
+        cx: &mut Context,
+    ) -> Poll<io::Result<()>> {
+        while buf.has_remaining() {
+            std::task::ready!(self.as_mut().poll_write_buf(&mut buf, cx)?)
+        }
+        Poll::Ready(Ok(()))
+    }
+
     /// Like [`poll_write_vectored`], except that it accepts instance of [`Buf`].
     ///
     /// `buf` will be advanced by the number of written bytes.
@@ -237,6 +260,15 @@ macro_rules! delegate {
             cx: &mut Context,
         ) -> Poll<io::Result<()>> {
             $($T)*::poll_write_buf($map, buf, cx)
+        }
+
+        #[inline]
+        fn poll_write_all_buf(
+            $s: Pin<&mut Self>,
+            buf: impl crate::bytes::Buf,
+            cx: &mut Context,
+        ) -> Poll<io::Result<()>> {
+            $($T)*::poll_write_all_buf($map, buf, cx)
         }
 
         #[inline]
