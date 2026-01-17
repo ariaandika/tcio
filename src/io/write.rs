@@ -196,6 +196,60 @@ pub trait AsyncWrite {
     }
 }
 
+/// This macro make sure to forward ALL methods which may be overriden by the implementor.
+///
+/// Otherwise, it will use default implementation.
+macro_rules! delegate {
+    (<$($T:tt),*>, |$s:ident|$map:expr) => {
+        #[inline]
+        fn poll_write($s: Pin<&mut Self>, buf: &[u8], cx: &mut Context) -> Poll<io::Result<usize>> {
+            $($T)*::poll_write($map, buf, cx)
+        }
+
+        #[inline]
+        fn poll_flush($s: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+            $($T)*::poll_flush($map, cx)
+        }
+
+        #[inline]
+        fn poll_shutdown($s: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
+            $($T)*::poll_shutdown($map, cx)
+        }
+
+        #[inline]
+        fn poll_write_vectored(
+            $s: Pin<&mut Self>,
+            bufs: &[IoSlice],
+            cx: &mut Context,
+        ) -> Poll<io::Result<usize>> {
+            $($T)*::poll_write_vectored($map, bufs, cx)
+        }
+
+        #[inline]
+        fn is_write_vectored(&self) -> bool {
+            $($T)*::is_write_vectored(self)
+        }
+
+        #[inline]
+        fn poll_write_buf(
+            $s: Pin<&mut Self>,
+            buf: impl crate::bytes::Buf,
+            cx: &mut Context,
+        ) -> Poll<io::Result<()>> {
+            $($T)*::poll_write_buf($map, buf, cx)
+        }
+
+        #[inline]
+        fn poll_write_buf_vectored(
+            $s: Pin<&mut Self>,
+            buf: impl crate::bytes::Buf,
+            cx: &mut Context,
+        ) -> Poll<io::Result<()>> {
+            $($T)*::poll_write_buf_vectored($map, buf, cx)
+        }
+    }
+}
+
 impl AsyncWrite for &mut [u8] {
     fn poll_write(self: Pin<&mut Self>, buf: &[u8], _: &mut Context) -> Poll<io::Result<usize>> {
         let me = self.get_mut();
@@ -231,31 +285,11 @@ impl AsyncWrite for Vec<u8> {
 }
 
 impl<T: AsyncWrite + Unpin + ?Sized> AsyncWrite for &mut T {
-    fn poll_write(self: Pin<&mut Self>, buf: &[u8], cx: &mut Context) -> Poll<io::Result<usize>> {
-        T::poll_write(Pin::new(self.get_mut()), buf, cx)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        T::poll_flush(Pin::new(self.get_mut()), cx)
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        T::poll_shutdown(Pin::new(self.get_mut()), cx)
-    }
+    delegate!(<T>, |self|Pin::new(self.get_mut()));
 }
 
 impl<T: AsyncWrite + Unpin + ?Sized> AsyncWrite for Box<T> {
-    fn poll_write(self: Pin<&mut Self>, buf: &[u8], cx: &mut Context) -> Poll<io::Result<usize>> {
-        T::poll_write(Pin::new(self.get_mut()), buf, cx)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        T::poll_flush(Pin::new(self.get_mut()), cx)
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        T::poll_shutdown(Pin::new(self.get_mut()), cx)
-    }
+    delegate!(<T>, |self|Pin::new(self.get_mut()));
 }
 
 impl<T> AsyncWrite for Pin<T>
@@ -263,17 +297,7 @@ where
     T: std::ops::DerefMut,
     T::Target: AsyncWrite,
 {
-    fn poll_write(self: Pin<&mut Self>, buf: &[u8], cx: &mut Context) -> Poll<io::Result<usize>> {
-        T::Target::poll_write(Pin::as_deref_mut(self), buf, cx)
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        T::Target::poll_flush(Pin::as_deref_mut(self), cx)
-    }
-
-    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
-        T::Target::poll_shutdown(Pin::as_deref_mut(self), cx)
-    }
+    delegate!(<T,::,Target>, |self|Pin::as_deref_mut(self));
 }
 
 // ===== tokio =====
@@ -286,6 +310,7 @@ mod tokio_io {
     use tokio::net::TcpStream;
 
     impl AsyncWrite for TcpStream {
+        #[inline]
         fn poll_write(
             self: Pin<&mut Self>,
             buf: &[u8],
@@ -294,12 +319,28 @@ mod tokio_io {
             TokioWrite::poll_write(self, cx, buf)
         }
 
+        #[inline]
         fn poll_flush(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
             TokioWrite::poll_flush(self, cx)
         }
 
+        #[inline]
         fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
             TokioWrite::poll_shutdown(self, cx)
+        }
+
+        #[inline]
+        fn poll_write_vectored(
+            self: Pin<&mut Self>,
+            bufs: &[IoSlice],
+            cx: &mut Context,
+        ) -> Poll<io::Result<usize>> {
+            TokioWrite::poll_write_vectored(self, cx, bufs)
+        }
+
+        #[inline]
+        fn is_write_vectored(&self) -> bool {
+            TokioWrite::is_write_vectored(self)
         }
     }
 
@@ -323,6 +364,20 @@ mod tokio_io {
 
             fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>> {
                 TokioWrite::poll_shutdown(self, cx)
+            }
+
+            #[inline]
+            fn poll_write_vectored(
+                self: Pin<&mut Self>,
+                bufs: &[IoSlice],
+                cx: &mut Context,
+            ) -> Poll<io::Result<usize>> {
+                TokioWrite::poll_write_vectored(self, cx, bufs)
+            }
+
+            #[inline]
+            fn is_write_vectored(&self) -> bool {
+                TokioWrite::is_write_vectored(self)
             }
         }
     }
