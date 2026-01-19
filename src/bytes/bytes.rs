@@ -793,3 +793,13 @@ impl super::Buf for Bytes {
         self.split_to(len)
     }
 }
+
+impl std::io::Read for Bytes {
+    #[inline]
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let read = buf.len().min(self.len());
+        buf[..read].copy_from_slice(&self[..read]);
+        self.advance(read);
+        Ok(read)
+    }
+}

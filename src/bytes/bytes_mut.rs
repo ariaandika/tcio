@@ -917,3 +917,26 @@ impl super::BufMut for BytesMut {
         self.extend_from_slice(src);
     }
 }
+
+impl std::io::Read for BytesMut {
+    #[inline]
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let read = buf.len().min(self.len());
+        buf[..read].copy_from_slice(&self[..read]);
+        self.advance(read);
+        Ok(read)
+    }
+}
+
+impl std::io::Write for BytesMut {
+    #[inline]
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    #[inline]
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
