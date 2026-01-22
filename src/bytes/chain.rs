@@ -1,4 +1,4 @@
-use crate::bytes::{Buf, BufMut};
+use crate::bytes::{Buf, BufMut, UninitSlice};
 
 /// A `Chain` sequences two buffers.
 ///
@@ -78,7 +78,7 @@ impl<T: BufMut, U: BufMut> BufMut for Chain<T, U> {
         self.a.remaining_mut().saturating_add(self.b.remaining_mut())
     }
 
-    fn chunk_mut(&mut self) -> &mut [std::mem::MaybeUninit<u8>] {
+    fn chunk_mut(&mut self) -> &mut UninitSlice {
         if self.a.has_remaining_mut() {
             self.a.chunk_mut()
         } else {

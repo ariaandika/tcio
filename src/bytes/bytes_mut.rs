@@ -3,9 +3,8 @@ use std::mem::{ManuallyDrop, MaybeUninit};
 use std::ptr::{self, NonNull};
 use std::slice;
 
-use super::Buf;
-use super::Bytes;
-use super::shared::{self, Shared};
+use crate::bytes::shared::{self, Shared};
+use crate::bytes::{Buf, Bytes, UninitSlice};
 
 // BytesMut is a unique `&mut [u8]` over a shared heap allocated `[u8]`
 //
@@ -861,23 +860,23 @@ impl Buf for BytesMut {
     }
 
     #[inline]
-    fn copy_to_bytes(&mut self, len: usize) -> super::Bytes {
+    fn copy_to_bytes(&mut self, len: usize) -> Bytes {
         self.split_to(len).freeze()
     }
 }
 
-impl super::BufMut for BytesMut {
+impl crate::bytes::BufMut for BytesMut {
     #[inline]
     fn remaining_mut(&self) -> usize {
         isize::MAX as usize - self.len()
     }
 
     #[inline]
-    fn chunk_mut(&mut self) -> &mut [MaybeUninit<u8>] {
+    fn chunk_mut(&mut self) -> &mut UninitSlice {
         if self.capacity() == self.len() {
             self.reserve(64);
         }
-        self.spare_capacity_mut()
+        UninitSlice::from_uninit(self.spare_capacity_mut())
     }
 
     #[inline]

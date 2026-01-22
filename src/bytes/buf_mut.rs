@@ -1,7 +1,7 @@
 use core::mem::{self, MaybeUninit};
 use core::ptr;
 
-use crate::bytes::Chain;
+use crate::bytes::{Chain, UninitSlice};
 
 /// A trait for values that provide sequential write access to bytes.
 ///
@@ -48,7 +48,7 @@ pub trait BufMut {
     ///
     /// This function may trigger an out-of-memory abort if it tries to allocate memory and fails
     /// to do so.
-    fn chunk_mut(&mut self) -> &mut [MaybeUninit<u8>];
+    fn chunk_mut(&mut self) -> &mut UninitSlice;
 
     /// Advance the internal cursor of the BufMut
     ///
@@ -88,11 +88,7 @@ pub trait BufMut {
         assert!(src.remaining() <= self.remaining_mut());
 
         while src.has_remaining() {
-            // SAFETY: MaybeUninit<u8>` is guaranteed to have the same size,
-            // alignment as `u8`, and we did not perform any read
-            let dst = unsafe {
-                mem::transmute::<&mut [MaybeUninit<u8>], &mut [u8]>(self.chunk_mut())
-            };
+            let dst = self.chunk_mut();
             let s = src.chunk();
             let cnt = usize::min(s.len(), dst.len());
 
@@ -152,7 +148,7 @@ macro_rules! delegate {
         }
 
         #[inline]
-        fn chunk_mut(&mut self) -> &mut [MaybeUninit<u8>] {
+        fn chunk_mut(&mut self) -> &mut UninitSlice {
             T::chunk_mut(self)
         }
 
@@ -188,7 +184,7 @@ impl BufMut for &mut [u8] {
     }
 
     #[inline]
-    fn chunk_mut(&mut self) -> &mut [MaybeUninit<u8>] {
+    fn chunk_mut(&mut self) -> &mut UninitSlice {
         unsafe { mem::transmute(&mut **self) }
     }
 
@@ -215,8 +211,8 @@ impl BufMut for &mut [MaybeUninit<u8>] {
     }
 
     #[inline]
-    fn chunk_mut(&mut self) -> &mut [MaybeUninit<u8>] {
-        self
+    fn chunk_mut(&mut self) -> &mut UninitSlice {
+        UninitSlice::from_uninit(self)
     }
 
     #[inline]
@@ -243,11 +239,11 @@ impl BufMut for Vec<u8> {
     }
 
     #[inline]
-    fn chunk_mut(&mut self) -> &mut [MaybeUninit<u8>] {
+    fn chunk_mut(&mut self) -> &mut UninitSlice {
         if self.capacity() == self.len() {
             self.reserve(64);
         }
-        self.spare_capacity_mut()
+        UninitSlice::from_uninit(self.spare_capacity_mut())
     }
 
     #[inline]

@@ -1,4 +1,4 @@
-use crate::bytes::{Buf, BufMut};
+use crate::bytes::{Buf, BufMut, UninitSlice};
 use std::{
     io::{self, IoSlice},
     pin::Pin,
@@ -22,7 +22,7 @@ where
 
     let n = {
         let dst = buf.chunk_mut();
-        let mut buf = ReadBuf::uninit(dst);
+        let mut buf = ReadBuf::from(dst);
         let ptr = buf.filled().as_ptr();
         ready!(Pin::new(io).poll_read(cx, &mut buf)?);
 
@@ -67,5 +67,12 @@ where
     }
 
     Poll::Ready(Ok(()))
+}
+
+impl<'a> From<&'a mut UninitSlice> for ReadBuf<'a> {
+    #[inline]
+    fn from(value: &'a mut UninitSlice) -> Self {
+        ReadBuf::uninit(unsafe { value.as_uninit_slice_mut() })
+    }
 }
 

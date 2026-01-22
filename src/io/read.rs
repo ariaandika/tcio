@@ -105,7 +105,7 @@ mod tokio_io {
             mut buf: impl BufMut,
             cx: &mut Context,
         ) -> Poll<io::Result<()>> {
-            let mut read = ReadBuf::uninit(buf.chunk_mut());
+            let mut read = ReadBuf::from(buf.chunk_mut());
             let result = TokioRead::poll_read(self, cx, &mut read);
             let read = read.filled().len();
             // SAFETY: `ReadBuf` guarantee that the filled is initialized
@@ -125,7 +125,7 @@ mod tokio_io {
                 mut buf: impl BufMut,
                 cx: &mut Context,
             ) -> Poll<io::Result<()>> {
-                let mut read = ReadBuf::uninit(buf.chunk_mut());
+                let mut read = ReadBuf::from(buf.chunk_mut());
                 let result = TokioRead::poll_read(self, cx, &mut read);
                 let read = read.filled().len();
                 // SAFETY: `ReadBuf` guarantee that the filled is initialized
