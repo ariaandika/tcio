@@ -1,34 +1,13 @@
 use std::io::{self, IoSlice};
 use std::pin::Pin;
-use std::task::{Context, Poll};
+use std::task::{Context, Poll, ready};
 
 /// Writes bytes asynchronously.
 ///
-/// This trait is analogous to the [`std::io::Write`] trait, but integrates with the asynchronous
-/// task system. In particular, the [`poll_write`] method, unlike [`Write::write`], will
-/// automatically queue the current task for wakeup and return if data is not yet available, rather
-/// than blocking the calling thread.
-///
-/// Specifically, this means that the [`poll_write`] function will return one of the following:
-///
-/// * `Poll::Ready(Ok(n))` means that `n` bytes of data was immediately written.
-///
-/// * `Poll::Pending` means that no data was written from the buffer
-///   provided. The I/O object is not currently writable but may become writable
-///   in the future. Most importantly, **the current future's task is scheduled
-///   to get unparked when the object is writable**. This means that like
-///   `Future::poll` you'll receive a notification when the I/O object is
-///   writable again.
-///
-/// * `Poll::Ready(Err(e))` for other errors are standard I/O errors coming from the
-///   underlying object.
-///
-/// This trait importantly means that the `write` method only works in the context of a future's
-/// task. The object may panic if used outside of a task.
-///
-/// [`std::io::Write`]: std::io::Write
-/// [`Write::write`]: std::io::Write::write()
-/// [`poll_write`]: AsyncWrite::poll_write()
+/// This trait is analogous to the `std::io::Write` trait, but integrates with the asynchronous
+/// task system. In particular, the `poll_write` method, unlike `Write::write`, will automatically
+/// queue the current task for wakeup and return if data is not yet available, rather than blocking
+/// the calling thread.
 pub trait AsyncWrite {
     /// Attempt to write bytes from `buf` into the object.
     ///
@@ -99,10 +78,6 @@ pub trait AsyncWrite {
     /// this method may also render the underlying `Write::write` method no longer usable (e.g.
     /// will return errors in the future). It's recommended that once `shutdown` is called the
     /// `write` method is no longer called.
-    ///
-    /// # Panics
-    ///
-    /// This function will panic if not called within the context of a future's task.
     fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context) -> Poll<io::Result<()>>;
 
     /// Like [`poll_write`], except that it writes from a slice of buffers.
@@ -134,7 +109,7 @@ pub trait AsyncWrite {
         let buf = bufs
             .iter()
             .find(|b| !b.is_empty())
-            .map_or(&[][..], |b| &**b);
+            .map_or(&[][..], <IoSlice as std::ops::Deref>::deref);
         self.poll_write(buf, cx)
     }
 
@@ -161,11 +136,11 @@ pub trait AsyncWrite {
         self: Pin<&mut Self>,
         mut buf: impl crate::bytes::Buf,
         cx: &mut Context,
-    ) -> Poll<io::Result<()>> {
+    ) -> Poll<io::Result<usize>> {
         match self.poll_write(buf.chunk(), cx) {
             Poll::Ready(Ok(write)) => {
                 buf.advance(write);
-                Poll::Ready(Ok(()))
+                Poll::Ready(Ok(write))
             }
             Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
             Poll::Pending => Poll::Pending,
@@ -190,7 +165,10 @@ pub trait AsyncWrite {
         cx: &mut Context,
     ) -> Poll<io::Result<()>> {
         while buf.has_remaining() {
-            std::task::ready!(self.as_mut().poll_write_buf(&mut buf, cx)?)
+            let read = ready!(self.as_mut().poll_write_buf(&mut buf, cx))?;
+            if read == 0 {
+                return Poll::Ready(Err(io::ErrorKind::WriteZero.into()));
+            }
         }
         Poll::Ready(Ok(()))
     }
@@ -258,7 +236,7 @@ macro_rules! delegate {
             $s: Pin<&mut Self>,
             buf: impl crate::bytes::Buf,
             cx: &mut Context,
-        ) -> Poll<io::Result<()>> {
+        ) -> Poll<io::Result<usize>> {
             $($T)*::poll_write_buf($map, buf, cx)
         }
 
