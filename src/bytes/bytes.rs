@@ -437,7 +437,7 @@ impl Bytes {
 
         assert!(at <= len, "split_off out of bounds: {at:?} <= {len:?}");
 
-        let mut clone = self.clone_inner();
+        let mut clone = self.clone_inner_mut();
         // SAFETY: `at <= self.len`
         unsafe { clone.advance_unchecked(at) };
         self.len = at;
@@ -475,7 +475,7 @@ impl Bytes {
 
         assert!(at <= len, "split_to out of bounds: {at:?} <= {len:?}");
 
-        let mut clone = self.clone_inner();
+        let mut clone = self.clone_inner_mut();
         // SAFETY: `at <= self.len`
         unsafe { self.advance_unchecked(at) };
         clone.len = at;
@@ -504,72 +504,65 @@ impl Bytes {
     }
 
     fn clone_inner(&self) -> Self {
-        let ptr = self.ptr;
-        let len = self.len;
         let shared = self.data.load(Ordering::Relaxed);
 
         if shared.is_null() {
             return Self {
-                ptr,
-                len,
+                ptr: self.ptr,
+                len: self.len,
                 data: AtomicPtr::new(std::ptr::null_mut()),
             };
         }
 
         match shared::as_unpromoted(shared) {
             Ok(offset) => {
-                let vec = self.build_unpromoted_vec(offset);
-                let new_shared = shared::promote_with_vec(vec, 2);
-
-                // because cloning is called via the `Clone` trait, which take `&self`, and `Bytes`
-                // is `Sync`, cloning could happens concurrently
-                match self.data.compare_exchange(
-                    shared,
-                    new_shared,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                ) {
-                    Ok(old_shared) => {
-                        // the returned pointer is the old pointer
-                        debug_assert!(std::ptr::eq(old_shared, shared));
-                        debug_assert!(!std::ptr::eq(old_shared, new_shared));
-
-                        Bytes {
-                            ptr,
-                            len,
-                            data: AtomicPtr::new(new_shared),
-                        }
-                    }
-                    Err(promoted_shared) => {
-                        // concurrent promotion happens during heap allocation
-                        debug_assert!(!std::ptr::eq(new_shared, promoted_shared));
-                        // the written pointer should have been promoted
-                        debug_assert!(shared::is_promoted(promoted_shared));
-
-                        unsafe {
-                            // release the heap that failed the promotion
-                            shared::release(Box::from_raw(new_shared));
-
-                            // increase the shared reference
-                            shared::increment(&*promoted_shared);
-                        }
-
-                        Bytes {
-                            ptr,
-                            len,
-                            data: AtomicPtr::new(promoted_shared),
-                        }
-                    }
-                }
+                promote_ref(self, offset, shared)
             }
             Err(shared_ref) => {
                 shared::increment(shared_ref);
-                Bytes {
-                    ptr,
-                    len,
+                Self {
+                    ptr: self.ptr,
+                    len: self.len,
                     data: AtomicPtr::new(shared),
                 }
             }
+        }
+    }
+
+    /// Like `clone_inner`, but because it have exclusive `&mut self`, promotion guaranteed to be
+    /// exclusive thus skip atomic operation
+    fn clone_inner_mut(&mut self) -> Self {
+        let shared = self.data.load(Ordering::Relaxed);
+
+        if shared.is_null() {
+            return Self {
+                ptr: self.ptr,
+                len: self.len,
+                data: AtomicPtr::new(std::ptr::null_mut()),
+            };
+        }
+
+        let data = match shared::as_unpromoted(shared) {
+            Ok(offset) => {
+                let vec = self.build_unpromoted_vec(offset);
+                let new_shared = shared::promote_with_vec(vec, 2);
+
+                // in contrast with `clone_inner`, we have exclusive `&mut self` means no promotion
+                // can happen concurrently
+                *self.data.get_mut() = new_shared;
+
+                new_shared
+            },
+            Err(shared_ref) => {
+                shared::increment(shared_ref);
+                shared
+            },
+        };
+
+        Self {
+            ptr: self.ptr,
+            len: self.len,
+            data: AtomicPtr::new(data),
         }
     }
 
@@ -695,6 +688,55 @@ impl Bytes {
             // unpromoted will not represent tail offset, it will be promoted beforehand,
             // thus it is the same as full length vector
             Vec::from_raw_parts(base_ptr, len, len)
+        }
+    }
+}
+
+// this function marked cold because promotion in `Bytes` is rare, the common way to create `Bytes`
+// is from `BytesMut` splitting and freeze, which is already promoted
+#[cold]
+fn promote_ref(me: &Bytes, offset: usize, shared: *mut Shared) -> Bytes {
+    let vec = me.build_unpromoted_vec(offset);
+    let new_shared = shared::promote_with_vec(vec, 2);
+
+    // because cloning is called via the `Clone` trait, which take `&self`, and `Bytes`
+    // is `Sync`, cloning could happens concurrently
+    match me.data.compare_exchange(
+        shared,
+        new_shared,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    ) {
+        Ok(old_shared) => {
+            // the returned pointer is the old pointer
+            debug_assert!(std::ptr::eq(old_shared, shared));
+            debug_assert!(!std::ptr::eq(old_shared, new_shared));
+
+            Bytes {
+                ptr: me.ptr,
+                len: me.len,
+                data: AtomicPtr::new(new_shared),
+            }
+        }
+        Err(promoted_shared) => {
+            // concurrent promotion happens during heap allocation
+            debug_assert!(!std::ptr::eq(new_shared, promoted_shared));
+            // the written pointer should have been promoted
+            debug_assert!(shared::is_promoted(promoted_shared));
+
+            unsafe {
+                // release the heap that failed the promotion
+                shared::release(Box::from_raw(new_shared));
+
+                // increase the shared reference
+                shared::increment(&*promoted_shared);
+            }
+
+            Bytes {
+                ptr: me.ptr,
+                len: me.len,
+                data: AtomicPtr::new(promoted_shared),
+            }
         }
     }
 }
