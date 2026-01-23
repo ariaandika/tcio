@@ -3,6 +3,47 @@ use core::ptr;
 
 use crate::bytes::{Chain, UninitSlice};
 
+macro_rules! fn_put_int {
+    ($ty:ident, $m:ident, $f:ident, $doc:literal) => {
+        #[doc = concat!("Put `", stringify!($ty), "` in ", $doc)]
+        ///
+        /// # Panics
+        ///
+        #[doc = concat!(
+            "Panics if `self` does not have enough capacity to contain ", stringify!($ty), "."
+        )]
+        #[inline]
+        fn $m(&mut self, n: $ty) {
+            self.put_slice(&n.$f());
+        }
+    };
+    ($f:ident, $doc:literal, $($ty:ident, $m:ident),* $(,)?) => {
+        $( fn_put_int!($ty, $m, $f, $doc); )*
+    };
+    () => {
+        fn_put_int!(
+            to_be_bytes, "big endian",
+            u16, put_u16, i16, put_i16,
+            u32, put_u32, i32, put_i32,
+            u64, put_u64, i64, put_i64,
+            u128, put_u128, i128, put_i128,
+        );
+        fn_put_int!(
+            to_le_bytes, "little endian",
+            u16, put_u16_le, i16, put_i16_le,
+            u32, put_u32_le, i32, put_i32_le,
+            u64, put_u64_le, i64, put_i64_le,
+            u128, put_u128_le, i128, put_i128_le,
+        );
+        fn_put_int!(
+            to_ne_bytes, "native endian",
+            u16, put_u16_ne, i16, put_i16_ne,
+            u32, put_u32_ne, i32, put_i32_ne,
+            u64, put_u64_ne, i64, put_i64_ne,
+            u128, put_u128_ne, i128, put_i128_ne,
+        );
+    };
+}
 /// A trait for values that provide sequential write access to bytes.
 ///
 /// Write bytes to a buffer
@@ -80,12 +121,14 @@ pub trait BufMut {
     /// # Panics
     ///
     /// Panics if `self` does not have enough capacity to contain `src`.
-    fn put<T: super::Buf>(&mut self, mut src: T)
+    fn put<T: crate::bytes::Buf>(&mut self, mut src: T)
     where
         // this is required for BufMut to be dyn compatible
         Self: Sized
     {
-        assert!(src.remaining() <= self.remaining_mut());
+        if src.remaining() > self.remaining_mut() {
+            remaining_mut_fail(src.remaining(), self.remaining_mut());
+        }
 
         while src.has_remaining() {
             let dst = self.chunk_mut();
@@ -110,7 +153,9 @@ pub trait BufMut {
     /// Panics if `self` does not have enough capacity to contain `src`.
     #[inline]
     fn put_slice(&mut self, mut src: &[u8]) {
-        assert!(src.len() <= self.remaining_mut());
+        if src.len() > self.remaining_mut() {
+            remaining_mut_fail(src.len(), self.remaining_mut());
+        }
 
         while !src.is_empty() {
             let dst = self.chunk_mut();
@@ -135,46 +180,65 @@ pub trait BufMut {
     {
         Chain::new(self, next)
     }
+
+    /// Put `u8`.
+    ///
+    /// `self` is `advanced_mut` by 1.
+    ///
+    /// # Panics
+    ///
+    /// Panics if current buf has no remaining capacity left.
+    #[inline]
+    fn put_u8(&mut self, n: u8) {
+        if !self.has_remaining_mut() {
+            remaining_mut_fail(1, 0)
+        }
+        unsafe {
+            self.chunk_mut().as_uninit_slice_mut()[0].write(n);
+            self.advance_mut(1);
+        }
+    }
+
+    /// Put `i8`.
+    ///
+    /// `self` is `advanced_mut` by 1.
+    ///
+    /// # Panics
+    ///
+    /// Panics if current buf has no remaining capacity left.
+    #[inline]
+    fn put_i8(&mut self, n: i8) {
+        if !self.has_remaining_mut() {
+            remaining_mut_fail(1, 0)
+        }
+        unsafe {
+            self.chunk_mut().as_uninit_slice_mut()[0].write(n as u8);
+            self.advance_mut(1);
+        }
+    }
+
+    fn_put_int!();
 }
 
-/// This macro make sure to forward ALL methods which may be overriden by the implementor.
+/// This macro make sure to forward methods which may be overriden by the implementor.
 ///
 /// Otherwise, it will use default implementation.
-macro_rules! delegate {
+macro_rules! delegate_blanket_impl {
     () => {
-        #[inline]
-        fn remaining_mut(&self) -> usize {
-            T::remaining_mut(self)
-        }
-
-        #[inline]
-        fn chunk_mut(&mut self) -> &mut UninitSlice {
-            T::chunk_mut(self)
-        }
-
-        #[inline]
-        unsafe fn advance_mut(&mut self, cnt: usize) {
-            unsafe { T::advance_mut(self, cnt) }
-        }
-
-        #[inline]
-        fn has_remaining_mut(&self) -> bool {
-            T::has_remaining_mut(self)
-        }
-
-        #[inline]
-        fn put_slice(&mut self, src: &[u8]) {
-            T::put_slice(self, src)
-        }
-    };
+        #[inline] fn remaining_mut(&self) -> usize { T::remaining_mut(self) }
+        #[inline] fn chunk_mut(&mut self) -> &mut UninitSlice { T::chunk_mut(self) }
+        #[inline] unsafe fn advance_mut(&mut self, cnt: usize)
+            { unsafe { T::advance_mut(self, cnt) } }
+        #[inline] fn has_remaining_mut(&self) -> bool { T::has_remaining_mut(self) }
+        #[inline] fn put_slice(&mut self, src: &[u8]) { T::put_slice(self, src) } };
 }
 
 impl<T: BufMut + ?Sized> BufMut for &mut T {
-    delegate!();
+    delegate_blanket_impl!();
 }
 
 impl<T: BufMut + ?Sized> BufMut for Box<T> {
-    delegate!();
+    delegate_blanket_impl!();
 }
 
 impl BufMut for &mut [u8] {
@@ -197,6 +261,9 @@ impl BufMut for &mut [u8] {
 
     #[inline]
     fn put_slice(&mut self, src: &[u8]) {
+        if src.len() > self.len() {
+            remaining_mut_fail(src.len(), self.len());
+        }
         // taken from `impl Write for &mut [u8]`.
         let (a, b) = mem::take(self).split_at_mut(src.len());
         a.copy_from_slice(src);
@@ -224,6 +291,9 @@ impl BufMut for &mut [MaybeUninit<u8>] {
 
     #[inline]
     fn put_slice(&mut self, src: &[u8]) {
+        if src.len() > self.len() {
+            remaining_mut_fail(src.len(), self.len());
+        }
         let (a, b) = mem::take(self).split_at_mut(src.len());
         unsafe {
             ptr::copy_nonoverlapping(src.as_ptr(), a.as_mut_ptr().cast(), src.len());
@@ -271,3 +341,16 @@ impl BufMut for Vec<u8> {
 
 // assert BufMut is dyn compatible.
 fn _assert_trait_object(_b: &dyn BufMut) {}
+
+// ===== panics =====
+
+// The panic code path was put into a cold function to not bloat the call site.
+
+#[cfg_attr(not(panic = "immediate-abort"), inline(never), cold)]
+#[cfg_attr(panic = "immediate-abort", inline)]
+#[track_caller]
+fn remaining_mut_fail(src_len: usize, rem_len: usize) -> ! {
+    panic!(
+        "source length ({src_len}) is more than destination remaining capacity ({rem_len})"
+    )
+}
