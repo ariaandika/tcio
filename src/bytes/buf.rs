@@ -22,44 +22,13 @@ macro_rules! fn_get_int {
         /// Returns `None` if there is not enough remaining bytes.
         fn $m2(&mut self) -> Option<$ty> {
             const SIZE: usize = size_of::<$ty>();
-
-            if self.remaining() < SIZE {
-                return None;
-            }
-
-            let bytes = if let Ok(&ok) = self.chunk().try_into() {
-                // buf is contiguous
-                self.advance(SIZE);
-                ok
-            } else {
-                // buf is not contiguous
-                let old_rem = self.remaining();
-                let mut bytes = [0u8; SIZE];
-                let mut tmp = &mut bytes[..];
-
-                while !tmp.is_empty() {
-                    let chunk = self.chunk();
-                    let cnt = chunk.len().min(tmp.len());
-                    let (dst, rest) = tmp.split_at_mut(cnt);
-                    dst.copy_from_slice(&chunk[..cnt]);
-                    tmp = rest;
-                    self.advance(cnt);
-                }
-
-                // this helps the compiler, because `self.advance()` is inside while loop, compiler
-                // cannot rely on it
-                unsafe { std::hint::assert_unchecked(self.remaining() == old_rem - SIZE) };
-
-                bytes
-            };
-
-            Some(<$ty>::$f(bytes))
+            let mut chunk = [0u8; SIZE];
+            self.copy_to_slice(&mut chunk[..]);
+            Some(<$ty>::$f(chunk))
         }
     };
     ($f:ident, $doc:literal, $($ty:ident, $m1:ident, $m2:ident),* $(,)?) => {
-        $(
-            fn_get_int!($ty, $m1, $m2, $f, $doc);
-        )*
+        $( fn_get_int!($ty, $m1, $m2, $f, $doc);)*
     };
     () => {
         fn_get_int!(
@@ -94,58 +63,6 @@ macro_rules! fn_get_int {
             i64, get_i64_ne, try_get_i64_ne,
             u128, get_u128_ne, try_get_u128_ne,
             i128, get_i128_ne, try_get_i128_ne,
-        );
-    };
-}
-
-macro_rules! impl_get_int_contiguous {
-    // u16, try_from_u16
-    ($ty:ident, $m:ident, $f:ident) => {
-        fn $m(&mut self) -> Option<$ty> {
-            const SIZE: usize = size_of::<$ty>();
-            let &chunk = self.chunk().first_chunk::<SIZE>()?;
-            self.advance(SIZE);
-            Some($ty::$f(chunk))
-        }
-    };
-    ($f:ident, $($ty:ident, $m:ident),* $(,)?) => {
-        $(
-            impl_get_int_contiguous!($ty, $m, $f);
-        )*
-    };
-    () => {
-        impl_get_int_contiguous!(
-            from_be_bytes,
-            u16, try_get_u16,
-            i16, try_get_i16,
-            u32, try_get_u32,
-            i32, try_get_i32,
-            u64, try_get_u64,
-            i64, try_get_i64,
-            u128, try_get_u128,
-            i128, try_get_i128,
-        );
-        impl_get_int_contiguous!(
-            from_le_bytes,
-            u16, try_get_u16_le,
-            i16, try_get_i16_le,
-            u32, try_get_u32_le,
-            i32, try_get_i32_le,
-            u64, try_get_u64_le,
-            i64, try_get_i64_le,
-            u128, try_get_u128_le,
-            i128, try_get_i128_le,
-        );
-        impl_get_int_contiguous!(
-            from_ne_bytes,
-            u16, try_get_u16_ne,
-            i16, try_get_i16_ne,
-            u32, try_get_u32_ne,
-            i32, try_get_i32_ne,
-            u64, try_get_u64_ne,
-            i64, try_get_i64_ne,
-            u128, try_get_u128_ne,
-            i128, try_get_i128_ne,
         );
     };
 }
@@ -256,6 +173,7 @@ pub trait Buf {
     /// # Panics
     ///
     /// This function panics if `dst.len() > self.remaining()`.
+    #[inline]
     fn copy_to_slice(&mut self, mut dst: &mut [u8]) {
         assert!(dst.len() <= self.remaining(), "target slice is larger than the remaining buf");
         while !dst.is_empty() {
@@ -268,8 +186,6 @@ pub trait Buf {
             self.advance(cnt);
         }
     }
-
-    // fn try_copy_to_slice() { }
 
     /// Consumes `len` bytes inside self and returns new instance of [`Bytes`] with
     /// this data.
@@ -314,7 +230,7 @@ pub trait Buf {
 
     /// Get `u8`.
     ///
-    /// This `buf` is advanced by 1.
+    /// `self` is advanced by 1.
     ///
     /// # Panics
     ///
@@ -329,7 +245,7 @@ pub trait Buf {
 
     /// Get `u8`.
     ///
-    /// This `buf` is advanced by 1.
+    /// `self` is advanced by 1.
     ///
     /// Returns `None` if current buf is empty.
     #[inline]
@@ -341,7 +257,7 @@ pub trait Buf {
 
     /// Get `i8`.
     ///
-    /// This `buf` is advanced by 1.
+    /// `self` is advanced by 1.
     ///
     /// # Panics
     ///
@@ -356,7 +272,7 @@ pub trait Buf {
 
     /// Get `i8`.
     ///
-    /// This `buf` is advanced by 1.
+    /// `self` is advanced by 1.
     ///
     /// Returns `None` if current buf is empty.
     #[inline]
@@ -404,8 +320,6 @@ impl Buf for &[u8] {
         *self = b;
         Bytes::copy_from_slice(a)
     }
-
-    impl_get_int_contiguous!();
 }
 
 impl Buf for Bytes {
@@ -436,8 +350,6 @@ impl Buf for Bytes {
     fn copy_to_bytes(&mut self, len: usize) -> Bytes {
         self.split_to(len)
     }
-
-    impl_get_int_contiguous!();
 }
 
 impl Buf for BytesMut {
@@ -477,8 +389,6 @@ impl Buf for BytesMut {
     fn copy_to_bytes(&mut self, len: usize) -> Bytes {
         self.split_to(len).freeze()
     }
-
-    impl_get_int_contiguous!();
 }
 
 // ===== blanket impl =====
@@ -503,19 +413,6 @@ macro_rules! delegate_blanket_impl {
         #[inline] fn has_remaining(&self) -> bool { T::has_remaining(self) }
         #[inline] fn copy_to_slice(&mut self, dst: &mut [u8]) { T::copy_to_slice(self, dst) }
         #[inline] fn copy_to_bytes(&mut self, len: usize) -> Bytes { T::copy_to_bytes(self, len) }
-        #[inline] fn try_get_u8(&mut self) -> Option<u8> { T::try_get_u8(self) }
-        #[inline] fn try_get_i8(&mut self) -> Option<i8> { T::try_get_i8(self) }
-        delegate_blanket_impl!(
-            @get_int
-            u16, try_get_u16, try_get_u16_le, try_get_u16_ne,
-            i16, try_get_i16, try_get_i16_le, try_get_i16_ne,
-            u32, try_get_u32, try_get_u32_le, try_get_u32_ne,
-            i32, try_get_i32, try_get_i32_le, try_get_i32_ne,
-            u64, try_get_u64, try_get_u64_le, try_get_u64_ne,
-            i64, try_get_i64, try_get_i64_le, try_get_i64_ne,
-            u128, try_get_u128, try_get_u128_le, try_get_u128_ne,
-            i128, try_get_i128, try_get_i128_le, try_get_i128_ne,
-        );
     };
 }
 
