@@ -834,37 +834,6 @@ impl<const N: usize> PartialEq<[u8; N]> for BytesMut {
     }
 }
 
-impl Buf for BytesMut {
-    #[inline]
-    fn remaining(&self) -> usize {
-        self.len
-    }
-
-    #[inline]
-    fn chunk(&self) -> &[u8] {
-        self.as_slice()
-    }
-
-    #[inline]
-    fn advance(&mut self, cnt: usize) {
-        assert!(
-            cnt <= self.len,
-            "cannot advance past `len`: {:?} <= {:?}",
-            cnt,
-            self.len,
-        );
-        unsafe {
-            // `cnt <= self.len`, and `self.len <= self.cap`
-            self.advance_unchecked(cnt);
-        }
-    }
-
-    #[inline]
-    fn copy_to_bytes(&mut self, len: usize) -> Bytes {
-        self.split_to(len).freeze()
-    }
-}
-
 impl crate::bytes::BufMut for BytesMut {
     #[inline]
     fn remaining_mut(&self) -> usize {

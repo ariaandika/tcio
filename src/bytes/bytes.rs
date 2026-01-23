@@ -772,28 +772,6 @@ crate::macros::partial_eq! {
     fn eq(self, other: BytesMut) { <[u8]>::eq(self, other.as_slice()) }
 }
 
-impl super::Buf for Bytes {
-    #[inline]
-    fn remaining(&self) -> usize {
-        self.len()
-    }
-
-    #[inline]
-    fn chunk(&self) -> &[u8] {
-        self.as_slice()
-    }
-
-    #[inline]
-    fn advance(&mut self, cnt: usize) {
-        Self::advance(self, cnt);
-    }
-
-    #[inline]
-    fn copy_to_bytes(&mut self, len: usize) -> Bytes {
-        self.split_to(len)
-    }
-}
-
 impl std::io::Read for Bytes {
     #[inline]
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {

@@ -1,6 +1,129 @@
 use std::io::IoSlice;
 
-use crate::bytes::{Take, Chain};
+use crate::bytes::{Bytes, BytesMut, Chain, Take};
+
+macro_rules! fn_get_int {
+    ($f:ident, $doc:literal, $($ty:ty, $m1:ident, $m2:ident),* $(,)?) => {
+        $(
+            #[doc = concat!("Get `", stringify!($ty), "` in ", $doc)]
+            ///
+            /// # Panics
+            ///
+            /// Panics if there is not enough remaining bytes.
+            #[inline]
+            fn $m1(&mut self) -> $ty {
+                match self.$m2() {
+                    Some(ok) => ok,
+                    None => remaining_fail(self.remaining(), size_of::<$ty>())
+                }
+            }
+
+            #[doc = concat!("Get `", stringify!($ty), "` in ", $doc)]
+            ///
+            /// Returns `None` if there is not enough remaining bytes.
+            fn $m2(&mut self) -> Option<$ty> {
+                const SIZE: usize = size_of::<$ty>();
+
+                if self.remaining() < SIZE {
+                    return None;
+                }
+
+                let bytes = if let Ok(&ok) = self.chunk().try_into() {
+                    // buf is contiguous
+                    self.advance(SIZE);
+                    ok
+                } else {
+                    // buf is not contiguous
+                    let old_rem = self.remaining();
+                    let mut bytes = [0u8; SIZE];
+                    let mut tmp = &mut bytes[..];
+
+                    while !tmp.is_empty() {
+                        let chunk = self.chunk();
+                        let cnt = chunk.len().min(tmp.len());
+                        let (dst, rest) = tmp.split_at_mut(cnt);
+                        dst.copy_from_slice(&chunk[..cnt]);
+                        tmp = rest;
+                        self.advance(cnt);
+                    }
+
+                    // this helps the compiler, because `self.advance()` is inside while loop, compiler
+                    // cannot rely on it
+                    unsafe { std::hint::assert_unchecked(self.remaining() == old_rem - SIZE) };
+
+                    bytes
+                };
+
+                Some(<$ty>::$f(bytes))
+            }
+        )*
+    };
+}
+
+macro_rules! impl_get_int_contiguous {
+    (u8, $m:ident, $f:ident) => {
+        fn $m(&mut self) -> Option<u8> {
+            let &chunk = self.chunk().first()?;
+            self.advance(1);
+            Some(chunk)
+        }
+    };
+    // u16, try_from_u16
+    ($ty:ident, $m:ident, $f:ident) => {
+        fn $m(&mut self) -> Option<$ty> {
+            const SIZE: usize = size_of::<$ty>();
+            let &chunk = self.chunk().first_chunk::<SIZE>()?;
+            self.advance(SIZE);
+            Some($ty::$f(chunk))
+        }
+    };
+    ($f:ident, $($ty:ident, $m:ident),* $(,)?) => {
+        $(
+            impl_get_int_contiguous!($ty, $m, $f);
+        )*
+    };
+    () => {
+        impl_get_int_contiguous!(
+            from_be_bytes,
+            u8, try_get_u8,
+            i8, try_get_i8,
+            u16, try_get_u16,
+            i16, try_get_i16,
+            u32, try_get_u32,
+            i32, try_get_i32,
+            u64, try_get_u64,
+            i64, try_get_i64,
+            u128, try_get_u128,
+            i128, try_get_i128,
+        );
+        impl_get_int_contiguous!(
+            from_le_bytes,
+            u8, try_get_u8_le,
+            i8, try_get_i8_le,
+            u16, try_get_u16_le,
+            i16, try_get_i16_le,
+            u32, try_get_u32_le,
+            i32, try_get_i32_le,
+            u64, try_get_u64_le,
+            i64, try_get_i64_le,
+            u128, try_get_u128_le,
+            i128, try_get_i128_le,
+        );
+        impl_get_int_contiguous!(
+            from_ne_bytes,
+            u8, try_get_u8_ne,
+            i8, try_get_i8_ne,
+            u16, try_get_u16_ne,
+            i16, try_get_i16_ne,
+            u32, try_get_u32_ne,
+            i32, try_get_i32_ne,
+            u64, try_get_u64_ne,
+            i64, try_get_i64_ne,
+            u128, try_get_u128_ne,
+            i128, try_get_i128_ne,
+        );
+    };
+}
 
 /// Read bytes from a buffer.
 ///
@@ -121,19 +244,19 @@ pub trait Buf {
 
     // fn try_copy_to_slice() { }
 
-    /// Consumes `len` bytes inside self and returns new instance of [`Bytes`][super::Bytes] with
+    /// Consumes `len` bytes inside self and returns new instance of [`Bytes`] with
     /// this data.
     ///
     /// This function may be optimized by the underlying type to avoid actual copies. For example,
-    /// [`Bytes`][super::Bytes] implementation will do a shallow copy (ref-count increment).
+    /// [`Bytes`] implementation will do a shallow copy (ref-count increment).
     ///
     /// # Panics
     ///
     /// This function panics if `len > self.remaining()`.
-    fn copy_to_bytes(&mut self, len: usize) -> super::Bytes {
+    fn copy_to_bytes(&mut self, len: usize) -> Bytes {
         use crate::bytes::BufMut;
         assert!(len <= self.remaining(), "``len is larger than the remaining buf");
-        let mut ret = crate::bytes::BytesMut::with_capacity(len);
+        let mut ret = BytesMut::with_capacity(len);
         ret.put(self.take(len));
         ret.freeze()
     }
@@ -158,57 +281,52 @@ pub trait Buf {
     {
         Chain::new(self, next)
     }
+
+    fn_get_int!(
+        from_be_bytes, "big endian",
+        u8, get_u8, try_get_u8,
+        i8, get_i8, try_get_i8,
+        u16, get_u16, try_get_u16,
+        i16, get_i16, try_get_i16,
+        u32, get_u32, try_get_u32,
+        i32, get_i32, try_get_i32,
+        u64, get_u64, try_get_u64,
+        i64, get_i64, try_get_i64,
+        u128, get_u128, try_get_u128,
+        i128, get_i128, try_get_i128,
+    );
+    fn_get_int!(
+        from_le_bytes, "little endian",
+        u8, get_u8_le, try_get_u8_le,
+        i8, get_i8_le, try_get_i8_le,
+        u16, get_u16_le, try_get_u16_le,
+        i16, get_i16_le, try_get_i16_le,
+        u32, get_u32_le, try_get_u32_le,
+        i32, get_i32_le, try_get_i32_le,
+        u64, get_u64_le, try_get_u64_le,
+        i64, get_i64_le, try_get_i64_le,
+        u128, get_u128_le, try_get_u128_le,
+        i128, get_i128_le, try_get_i128_le,
+    );
+    fn_get_int!(
+        from_ne_bytes, "native endian",
+        u8, get_u8_ne, try_get_u8_ne,
+        i8, get_i8_ne, try_get_i8_ne,
+        u16, get_u16_ne, try_get_u16_ne,
+        i16, get_i16_ne, try_get_i16_ne,
+        u32, get_u32_ne, try_get_u32_ne,
+        i32, get_i32_ne, try_get_i32_ne,
+        u64, get_u64_ne, try_get_u64_ne,
+        i64, get_i64_ne, try_get_i64_ne,
+        u128, get_u128_ne, try_get_u128_ne,
+        i128, get_i128_ne, try_get_i128_ne,
+    );
 }
 
-/// This macro make sure to forward ALL methods which may be overriden by the implementor.
-///
-/// Otherwise, it will use default implementation.
-macro_rules! delegate {
-    () => {
-        #[inline]
-        fn remaining(&self) -> usize {
-            T::remaining(self)
-        }
+// Buf is dyn compatible.
+fn _assert_trait_object(_b: &dyn Buf) {}
 
-        #[inline]
-        fn chunk(&self) -> &[u8] {
-            T::chunk(self)
-        }
-
-        #[inline]
-        fn advance(&mut self, cnt: usize) {
-            T::advance(self, cnt);
-        }
-
-        #[inline]
-        fn chunks_vectored<'a>(&'a self, dst: &mut [std::io::IoSlice<'a>]) -> usize {
-            T::chunks_vectored(self, dst)
-        }
-
-        #[inline]
-        fn has_remaining(&self) -> bool {
-            T::has_remaining(self)
-        }
-
-        #[inline]
-        fn copy_to_slice(&mut self, dst: &mut [u8]) {
-            T::copy_to_slice(self, dst)
-        }
-
-        #[inline]
-        fn copy_to_bytes(&mut self, len: usize) -> super::Bytes {
-            T::copy_to_bytes(self, len)
-        }
-    };
-}
-
-impl<T: Buf + ?Sized> Buf for &mut T {
-    delegate!();
-}
-
-impl<T: Buf + ?Sized> Buf for Box<T> {
-    delegate!();
-}
+// ===== impl Buf =====
 
 impl Buf for &[u8] {
     #[inline]
@@ -233,12 +351,105 @@ impl Buf for &[u8] {
     }
 
     #[inline]
-    fn copy_to_bytes(&mut self, len: usize) -> super::Bytes {
+    fn copy_to_bytes(&mut self, len: usize) -> Bytes {
         let (a, b) = self.split_at(len);
         *self = b;
-        super::Bytes::copy_from_slice(a)
+        Bytes::copy_from_slice(a)
+    }
+
+    impl_get_int_contiguous!();
+}
+
+impl Buf for Bytes {
+    #[inline]
+    fn remaining(&self) -> usize {
+        self.len()
+    }
+
+    #[inline]
+    fn chunk(&self) -> &[u8] {
+        self.as_slice()
+    }
+
+    #[inline]
+    fn advance(&mut self, cnt: usize) {
+        Self::advance(self, cnt);
+    }
+
+    #[inline]
+    fn copy_to_bytes(&mut self, len: usize) -> Bytes {
+        self.split_to(len)
+    }
+
+    impl_get_int_contiguous!();
+}
+
+impl Buf for BytesMut {
+    #[inline]
+    fn remaining(&self) -> usize {
+        self.len()
+    }
+
+    #[inline]
+    fn chunk(&self) -> &[u8] {
+        self.as_slice()
+    }
+
+    #[inline]
+    fn advance(&mut self, cnt: usize) {
+        assert!(
+            cnt <= self.len(),
+            "cannot advance past `len`: {:?} <= {:?}",
+            cnt,
+            self.len(),
+        );
+        unsafe {
+            // SAFETY: `cnt <= self.len`, and `self.len <= self.cap`
+            self.advance_unchecked(cnt);
+        }
+    }
+
+    #[inline]
+    fn copy_to_bytes(&mut self, len: usize) -> Bytes {
+        self.split_to(len).freeze()
     }
 }
 
-// assert Buf is dyn compatible.
-fn _assert_trait_object(_b: &dyn Buf) {}
+// ===== blanket impl =====
+
+/// This macro make sure to forward methods which may be overriden by the implementor.
+///
+/// Otherwise, it will use default implementation.
+macro_rules! delegate_blanket_impl {
+    () => {
+        #[inline] fn remaining(&self) -> usize { T::remaining(self) }
+        #[inline] fn chunk(&self) -> &[u8] { T::chunk(self) }
+        #[inline] fn advance(&mut self, cnt: usize) { T::advance(self, cnt); }
+        #[inline] fn chunks_vectored<'a>(&'a self, dst: &mut [std::io::IoSlice<'a>])
+            -> usize { T::chunks_vectored(self, dst) }
+        #[inline] fn has_remaining(&self) -> bool { T::has_remaining(self) }
+        #[inline] fn copy_to_slice(&mut self, dst: &mut [u8]) { T::copy_to_slice(self, dst) }
+        #[inline] fn copy_to_bytes(&mut self, len: usize) -> super::Bytes { T::copy_to_bytes(self, len) }
+    };
+}
+
+impl<T: Buf + ?Sized> Buf for &mut T {
+    delegate_blanket_impl!();
+}
+
+impl<T: Buf + ?Sized> Buf for Box<T> {
+    delegate_blanket_impl!();
+}
+
+// ===== panics =====
+
+// The panic code path was put into a cold function to not bloat the call site.
+
+#[cfg_attr(not(panic = "immediate-abort"), inline(never), cold)]
+#[cfg_attr(panic = "immediate-abort", inline)]
+#[track_caller]
+fn remaining_fail(src_len: usize, req_len: usize) -> ! {
+    panic!(
+        "source remaining ({src_len}) is less than requested length ({req_len})"
+    )
+}

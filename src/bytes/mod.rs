@@ -11,7 +11,6 @@ mod shared;
 
 mod buf;
 mod buf_mut;
-mod bytes_ext;
 
 mod bytes;
 mod bytes_mut;
@@ -22,7 +21,6 @@ mod chain;
 
 pub use buf::Buf;
 pub use buf_mut::BufMut;
-pub use bytes_ext::BytesExt;
 pub use bytes::Bytes;
 pub use bytes_mut::BytesMut;
 pub use bytestr::ByteStr;
