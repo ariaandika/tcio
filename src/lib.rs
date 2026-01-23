@@ -14,4 +14,4 @@ pub mod io;
 pub mod num;
 
 #[cfg(feature = "tokio")]
-pub mod tokio;
+mod tokio;
