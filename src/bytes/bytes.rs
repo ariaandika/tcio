@@ -422,26 +422,63 @@ impl Bytes {
     /// assert_eq!(&bytes, &b"Hello "[..]);
     /// assert_eq!(&split, &b"World!"[..]);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `at > self.len()`.
+    #[inline]
     pub fn split_off(&mut self, at: usize) -> Self {
+        match self.try_split_off(at) {
+            Some(ok) => ok,
+            None => panic!("split_off out of bounds: {at:?} <= {:?}", self.len()),
+        }
+    }
+
+    /// Splits `Bytes` into two at the given index.
+    ///
+    /// Afterwards `self` contains elements `[0, at)`, and the returned `Bytes` contains
+    /// elements `[at, capacity)`.
+    ///
+    /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
+    ///
+    /// Returns `None` if `at > self.len()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::Bytes;
+    /// # fn run() -> Option<()> {
+    /// let mut bytes = Bytes::copy_from_slice(b"Hello World!");
+    /// let split = bytes.try_split_off(6)?;
+    /// assert_eq!(&bytes, &b"Hello "[..]);
+    /// assert_eq!(&split, &b"World!"[..]);
+    /// assert!(bytes.try_split_off(10).is_none());
+    /// # Some(())
+    /// # }
+    /// # assert!(run().is_some());
+    /// ```
+    pub fn try_split_off(&mut self, at: usize) -> Option<Self> {
         let len = self.len;
+
+        if at > len {
+            return None;
+        }
 
         if at == len {
             // SAFETY: `self.ptr.add(self.len)` is always valid
             let ptr = unsafe { self.ptr.add(len) };
-            return Bytes::new_empty_with_ptr(ptr);
+            return Some(Bytes::new_empty_with_ptr(ptr));
         }
 
         if at == 0 {
-            return mem::replace(self, Bytes::new_empty_with_ptr(self.ptr));
+            return Some(mem::replace(self, Bytes::new_empty_with_ptr(self.ptr)));
         }
-
-        assert!(at <= len, "split_off out of bounds: {at:?} <= {len:?}");
 
         let mut clone = self.clone_inner_mut();
         // SAFETY: `at <= self.len`
         unsafe { clone.advance_unchecked(at) };
         self.len = at;
-        clone
+        Some(clone)
     }
 
     /// Splits `Bytes` into two at the given index.
@@ -460,26 +497,63 @@ impl Bytes {
     /// assert_eq!(&bytes, &b"World!"[..]);
     /// assert_eq!(&split, &b"Hello "[..]);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `at > self.len()`.
+    #[inline]
     pub fn split_to(&mut self, at: usize) -> Self {
+        match self.try_split_to(at) {
+            Some(ok) => ok,
+            None => panic!("split_to out of bounds: {at:?} <= {:?}", self.len()),
+        }
+    }
+
+    /// Splits `Bytes` into two at the given index.
+    ///
+    /// Afterwards `self` contains elements `[at, len)`, and the returned `Bytes` contains
+    /// elements `[0, at)`.
+    ///
+    /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
+    ///
+    /// Returns `None` if `at > self.len()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::Bytes;
+    /// # fn run() -> Option<()> {
+    /// let mut bytes = Bytes::copy_from_slice(b"Hello World!");
+    /// let split = bytes.try_split_to(6)?;
+    /// assert_eq!(&bytes, &b"World!"[..]);
+    /// assert_eq!(&split, &b"Hello "[..]);
+    /// assert!(bytes.try_split_to(10).is_none());
+    /// # Some(())
+    /// # }
+    /// # assert!(run().is_some());
+    /// ```
+    pub fn try_split_to(&mut self, at: usize) -> Option<Self> {
         let len = self.len;
+
+        if at > len {
+            return None;
+        }
 
         if at == len {
             // SAFETY: `self.ptr.add(self.len)` is valid
             let ptr = unsafe { self.ptr.add(len) };
-            return mem::replace(self, Bytes::new_empty_with_ptr(ptr));
+            return Some(mem::replace(self, Bytes::new_empty_with_ptr(ptr)));
         }
 
         if at == 0 {
-            return Bytes::new_empty_with_ptr(self.ptr);
+            return Some(Bytes::new_empty_with_ptr(self.ptr));
         }
-
-        assert!(at <= len, "split_to out of bounds: {at:?} <= {len:?}");
 
         let mut clone = self.clone_inner_mut();
         // SAFETY: `at <= self.len`
         unsafe { self.advance_unchecked(at) };
         clone.len = at;
-        clone
+        Some(clone)
     }
 }
 

@@ -502,14 +502,46 @@ impl BytesMut {
     /// assert_eq!(&split, &b"userinfo"[..]);
     /// assert_eq!(&bytes, &b"@example.com"[..]);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `at > self.len()`.
     #[inline]
     pub fn split_to(&mut self, at: usize) -> BytesMut {
-        assert!(
-            at <= self.len,
-            "BytesMut::split_to out of bounds: {:?} <= {:?}",
-            at,
-            self.len,
-        );
+        match self.try_split_to(at) {
+            Some(ok) => ok,
+            None => panic!("split_to out of bounds: {at:?} <= {:?}", self.len),
+        }
+    }
+
+    /// Splits `BytesMut` into two at the given index.
+    ///
+    /// Afterwards `self` contains elements `[at, len)`, and the returned `BytesMut` contains
+    /// elements `[0, at)`.
+    ///
+    /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
+    ///
+    /// Returns `None` if `at > self.len()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::BytesMut;
+    /// # fn run() -> Option<()> {
+    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
+    /// let split = bytes.try_split_to(8)?;
+    /// assert_eq!(&split, &b"userinfo"[..]);
+    /// assert_eq!(&bytes, &b"@example.com"[..]);
+    /// assert!(bytes.try_split_to(16).is_none());
+    /// # Some(())
+    /// # }
+    /// # assert!(run().is_some());
+    /// ```
+    #[inline]
+    pub fn try_split_to(&mut self, at: usize) -> Option<BytesMut> {
+        if at > self.len {
+            return None;
+        }
         let mut clone = self.shallow_clone();
         unsafe {
             // `at <= self.len`, and `self.len <= self.cap`
@@ -517,7 +549,7 @@ impl BytesMut {
         }
         clone.cap = at;
         clone.len = at;
-        clone
+        Some(clone)
     }
 
     /// Splits `BytesMut` into two at the given pointer.
@@ -544,9 +576,9 @@ impl BytesMut {
     /// ```
     #[inline]
     pub fn split_to_ptr(&mut self, ptr: *const u8) -> BytesMut {
-        match ptr.addr().overflowing_sub(self.ptr.addr().get()) {
-            (at, false) => self.split_to(at),
-            (_, true) => panic!("split out of bounds")
+        match ptr.addr().checked_sub(self.ptr.addr().get()) {
+            Some(at) => self.split_to(at),
+            None => panic!("split out of bounds")
         }
     }
 
@@ -566,14 +598,46 @@ impl BytesMut {
     /// assert_eq!(&bytes, &b"userinfo"[..]);
     /// assert_eq!(&split, &b"@example.com"[..]);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `at > self.capacity()`.
     #[inline]
     pub fn split_off(&mut self, at: usize) -> BytesMut {
-        assert!(
-            at <= self.cap,
-            "BytesMut::split_off out of bounds: {:?} <= {:?}",
-            at,
-            self.cap,
-        );
+        match self.try_split_off(at) {
+            Some(ok) => ok,
+            None => panic!("split_off out of bounds: {at:?} <= {:?}", self.len),
+        }
+    }
+
+    /// Splits `BytesMut` into two at the given index.
+    ///
+    /// Afterwards `self` contains elements `[0, at)`, and the returned `BytesMut` contains
+    /// elements `[at, capacity)`.
+    ///
+    /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
+    ///
+    /// Returns `None` if `at > self.capacity()`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::BytesMut;
+    /// # fn run() -> Option<()> {
+    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
+    /// let split = bytes.try_split_off(8)?;
+    /// assert_eq!(&bytes, &b"userinfo"[..]);
+    /// assert_eq!(&split, &b"@example.com"[..]);
+    /// assert!(bytes.try_split_off(16).is_none());
+    /// # Some(())
+    /// # }
+    /// # assert!(run().is_some());
+    /// ```
+    #[inline]
+    pub fn try_split_off(&mut self, at: usize) -> Option<BytesMut> {
+        if at > self.cap {
+            return None;
+        }
         let mut other = self.shallow_clone();
         unsafe {
             // `at <= self.cap`
@@ -581,7 +645,7 @@ impl BytesMut {
         }
         self.cap = at;
         self.len = cmp::min(self.len, at); // could advance pass `self.len`
-        other
+        Some(other)
     }
 
     /// Splits `BytesMut` into two at the given index.
