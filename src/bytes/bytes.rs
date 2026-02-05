@@ -240,6 +240,7 @@ impl Bytes {
     /// # Panics
     ///
     /// `subset` should be contained in `Bytes` content, otherwise panic.
+    #[inline]
     pub fn slice_ref(&self, subset: &[u8]) -> Self {
         self.slice_from_raw(subset.as_ptr(), subset.len())
     }
@@ -341,6 +342,7 @@ impl Bytes {
     /// bytes.advance(6);
     /// assert_eq!(&bytes, &b"World!"[..]);
     /// ```
+    #[inline]
     pub fn advance(&mut self, cnt: usize) {
         assert!(cnt <= self.len, "out of bounds");
 
