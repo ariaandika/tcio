@@ -22,13 +22,50 @@ pub struct Bytes {
 unsafe impl Send for Bytes {}
 unsafe impl Sync for Bytes {}
 
+impl Drop for Bytes {
+    fn drop(&mut self) {
+        let shared = *self.data.get_mut();
+
+        if shared.is_null() {
+            return;
+        }
+
+        match shared::into_unpromoted(shared) {
+            Ok(offset) => {
+                let _ = self.build_unpromoted_vec(offset);
+            }
+            Err(shared) => {
+                shared::release(shared);
+            }
+        }
+    }
+}
+
+impl Default for Bytes {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clone for Bytes {
+    #[inline]
+    fn clone(&self) -> Self {
+        self.clone_inner()
+    }
+}
+
 // ===== Constructor =====
 
 impl Bytes {
     /// Create new empty [`Bytes`].
     #[inline]
     pub const fn new() -> Self {
-        Self::from_static(&[])
+        Self {
+            ptr: NonNull::dangling(),
+            len: 0,
+            data: AtomicPtr::new(std::ptr::null_mut()),
+        }
     }
 
     /// Create new [`Bytes`] from static slice.
@@ -37,7 +74,7 @@ impl Bytes {
     #[inline]
     pub const fn from_static(bytes: &'static [u8]) -> Self {
         Self {
-            ptr: unsafe { NonNull::new_unchecked(bytes.as_ptr().cast_mut()) },
+            ptr: NonNull::new(bytes.as_ptr().cast_mut()).expect("reference cannot be null"),
             len: bytes.len(),
             data: AtomicPtr::new(std::ptr::null_mut()),
         }
@@ -54,14 +91,14 @@ impl Bytes {
             return Self::new();
         }
 
-        let ptr = unsafe { NonNull::new_unchecked(vec.as_mut_ptr()) };
+        let ptr = NonNull::new(vec.as_mut_ptr()).expect("vec cannot return nullptr");
         let len = vec.len();
         let cap = vec.capacity();
 
         // `into_boxed_slice`, which call `shrink_to_fit` will only reallocate
         // if `capacity > len`
         if cap == len {
-            let _vec = ManuallyDrop::new(vec);
+            let _ = vec.into_raw_parts();
             let data = AtomicPtr::new(shared::new_unpromoted());
             Self { ptr, len, data }
         } else {
@@ -72,7 +109,7 @@ impl Bytes {
             // - if `len < cap`, there is a "tail offset", thus
             //   `len` cannot be treated as capacity
             // Consideration:
-            // - `into_boxed_slice`: reallocate and copy the bytes, as expensive as vector length
+            // - `into_boxed_slice`: reallocate and copy the bytes, as expensive as the vector length
             // - `shared::promote_with_vec`: allocate `AtomicUsize`, pointer, and capacity (3 word)
 
             let data = AtomicPtr::new(shared::promote_with_vec(vec, 1));
@@ -83,7 +120,7 @@ impl Bytes {
     fn from_box(boxed: Box<[u8]>) -> Self {
         Self {
             len: boxed.len(),
-            ptr: unsafe { NonNull::new_unchecked(Box::into_raw(boxed).cast()) },
+            ptr: NonNull::new(Box::into_raw(boxed).cast()).expect("box cannot returns nullptr"),
             data: AtomicPtr::new(shared::new_unpromoted()),
         }
     }
@@ -131,7 +168,7 @@ impl Bytes {
 
     /// Specialized empty `Bytes` with given pointer.
     ///
-    /// This is used when split and resulting in empty `Bytes` that does not need to inc rement the
+    /// This is used when split and resulting in empty `Bytes` that does not need to increment the
     /// atomic counter.
     fn new_empty_with_ptr(ptr: NonNull<u8>) -> Self {
         Self {
@@ -148,7 +185,7 @@ impl Bytes {
     }
 }
 
-// ===== View =====
+// ===== Split/Slice =====
 
 impl Bytes {
     /// Returns the shared subset of `Bytes` with given range.
@@ -164,66 +201,50 @@ impl Bytes {
     ///
     /// # Panics
     ///
-    /// `range` should be in bounds of bytes capacity, otherwise panic.
-    #[inline]
+    /// `range` should be in bounds of bytes length, otherwise panic.
     pub fn slice(&self, range: impl core::ops::RangeBounds<usize>) -> Self {
-        self.slice_bound(range.start_bound(), range.end_bound())
+        self.try_slice_bound(range.start_bound(), range.end_bound()).expect("out of bounds")
     }
 
-    fn slice_bound(
+    fn try_slice_bound(
         &self,
         start_bound: core::ops::Bound<&usize>,
         end_bound: core::ops::Bound<&usize>,
-    ) -> Self {
+    ) -> Option<Self> {
         use core::ops::Bound;
-
-        let self_len = self.len;
-
         let begin = match start_bound {
             Bound::Included(&n) => n,
-            Bound::Excluded(&n) => n.checked_add(1).expect("out of range"),
+            Bound::Excluded(&n) => n.checked_add(1)?,
             Bound::Unbounded => 0,
         };
-
         let end = match end_bound {
-            Bound::Included(&n) => n.checked_add(1).expect("out of range"),
+            Bound::Included(&n) => n.checked_add(1)?,
             Bound::Excluded(&n) => n,
-            Bound::Unbounded => self_len,
+            Bound::Unbounded => self.len,
         };
-
-        assert!(end <= self_len, "out of bounds");
-
-        // ASSERT:
-        // 1. is `begin <= end`
-        // 2. is `len <= end`
-        // 3. is `end <= self.len`,
-        // 4. #1, then `begin <= self.len`
-        // 5. #1 and #2, then `len <= self.len`
-        let len = end
-            .checked_sub(begin)
-            .expect("range should not be reversed");
-
+        if end > self.len {
+            return None;
+        }
+        let len = end.checked_sub(begin)?;
         // SAFETY:
-        // with invariant that `self.ptr` valid until `self.len` forward
-        //
-        // 1. is `begin` and `end` is relative to `self.ptr`, then `self.ptr <= ptr`
-        // 2. is `begin <= self.len`, then `self.ptr.add(begin) <= self.len`
-        // 3. - is `end <= self.len`, then `self.ptr.add(end) <= self.ptr.add(self.len)`
-        //    - is `len <= end`, then `len < self.len`
-        //    - then `len` correctly represent offset of
-        //      `self.ptr.add(begin)` to `self.ptr.add(begin)`
+        // 1. `end <= self.len`,
+        // 2. `begin <= end <= self.len`
+        // 3. `len <= end <= self.len`
+        // 4. `self.ptr` is valid until `self.len` forward
+        // 5. with `begin <= self.len`, then `self.ptr.add(begin)` is in bounds
+        // 6. with `end <= self.len`, then `self.ptr.add(end) <= self.ptr.add(self.len)`
+        // 7. with `len <= end`, then len` correctly represent offset from
+        //    `self.ptr.add(begin)` to `self.ptr.add(end)`
         //
         // then `self.ptr.add(begin)` valid until `len` forward
         let ptr = unsafe { self.ptr.add(begin) };
-
         if len == 0 {
-            return Bytes::new_empty_with_ptr(ptr);
+            return Some(Bytes::new_empty_with_ptr(ptr));
         }
-
         let mut cloned = self.clone_inner();
         cloned.ptr = ptr;
         cloned.len = len;
-        cloned
+        Some(cloned)
     }
 
     /// Returns the shared subset of `Bytes` with given slice.
@@ -459,6 +480,7 @@ impl Bytes {
     /// # }
     /// # assert!(run().is_some());
     /// ```
+    #[inline]
     pub fn try_split_off(&mut self, at: usize) -> Option<Self> {
         let len = self.len;
 
@@ -477,8 +499,7 @@ impl Bytes {
         }
 
         let mut clone = self.clone_inner_mut();
-        // SAFETY: `at <= self.len`
-        unsafe { clone.advance_unchecked(at) };
+        clone.advance(at);
         self.len = at;
         Some(clone)
     }
@@ -534,6 +555,7 @@ impl Bytes {
     /// # }
     /// # assert!(run().is_some());
     /// ```
+    #[inline]
     pub fn try_split_to(&mut self, at: usize) -> Option<Self> {
         let len = self.len;
 
@@ -552,8 +574,7 @@ impl Bytes {
         }
 
         let mut clone = self.clone_inner_mut();
-        // SAFETY: `at <= self.len`
-        unsafe { self.advance_unchecked(at) };
+        self.advance(at);
         clone.len = at;
         Some(clone)
     }
@@ -639,23 +660,6 @@ impl Bytes {
             ptr: self.ptr,
             len: self.len,
             data: AtomicPtr::new(data),
-        }
-    }
-
-    fn drop_inner(&mut self) {
-        let shared = *self.data.get_mut();
-
-        if shared.is_null() {
-            return;
-        }
-
-        match shared::into_unpromoted(shared) {
-            Ok(offset) => {
-                let _ = self.build_unpromoted_vec(offset);
-            }
-            Err(shared) => {
-                shared::release(shared);
-            }
         }
     }
 
@@ -818,27 +822,6 @@ fn promote_ref(me: &Bytes, offset: usize, shared: *mut Shared) -> Bytes {
 }
 
 // ===== std traits =====
-
-impl Drop for Bytes {
-    #[inline]
-    fn drop(&mut self) {
-        self.drop_inner();
-    }
-}
-
-impl Default for Bytes {
-    #[inline]
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Clone for Bytes {
-    #[inline]
-    fn clone(&self) -> Self {
-        self.clone_inner()
-    }
-}
 
 impl AsRef<[u8]> for Bytes {
     #[inline]
