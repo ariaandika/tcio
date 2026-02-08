@@ -85,11 +85,40 @@ pub struct BytesMut {
     ptr: NonNull<u8>,
     len: usize,
     cap: usize,
-    data: *mut Shared,
+    data: NonNull<Shared>,
 }
 
 unsafe impl Send for BytesMut { }
 unsafe impl Sync for BytesMut { }
+
+impl Drop for BytesMut {
+    #[inline]
+    fn drop(&mut self) {
+        match shared::into_unpromoted(self.data) {
+            Ok(offset) => {
+                // SAFETY: to be drop
+                unsafe { drop(self.original_buffer(offset)) };
+            },
+            Err(shared) => {
+                shared::release(shared);
+            },
+        }
+    }
+}
+
+impl Default for BytesMut {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clone for BytesMut {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self::copy_from_slice(self.as_slice())
+    }
+}
 
 impl BytesMut {
     /// Create new empty [`BytesMut`].
@@ -235,7 +264,7 @@ impl BytesMut {
     /// Try to reclaim all leftover capacity without allocating.
     #[inline]
     pub fn try_reclaim_full(&mut self) -> bool {
-        let additional = match shared::as_unpromoted(self.data) {
+        let additional = match shared::as_unpromoted_non_null(self.data) {
             Ok(offset) => offset + (self.cap - self.len),
             Err(shared) => shared.capacity() - self.len,
         };
@@ -256,7 +285,7 @@ impl BytesMut {
         let ptr = self.ptr.as_ptr();
         let len = self.len;
 
-        match shared::as_unpromoted_mut(self.data) {
+        match shared::as_unpromoted_mut(&mut self.data) {
             Ok(offset) => {
                 let remaining = offset + (self.cap - self.len);
 
@@ -272,7 +301,7 @@ impl BytesMut {
                         self.cap += offset;
 
                         // reset the `offset`
-                        self.data = shared::mask_payload(self.data, 0);
+                        self.data = shared::mask_payload(self.data.as_ptr(), 0);
 
                         return true;
                     }
@@ -299,7 +328,7 @@ impl BytesMut {
                     self.ptr = NonNull::new_unchecked(new_ptr);
                     self.cap = new_vec.capacity();
                     // reset the `offset`
-                    self.data = shared::mask_payload(self.data, 0);
+                    self.data = shared::mask_payload(self.data.as_ptr(), 0);
                 }
 
                 true
@@ -454,14 +483,14 @@ impl BytesMut {
     /// Converts `self` into an immutable [`Bytes`].
     #[inline]
     pub fn freeze(self) -> Bytes {
-        match shared::as_unpromoted(self.data) {
+        match shared::as_unpromoted_non_null(self.data) {
             Ok(offset) => unsafe {
                 let vec = ManuallyDrop::new(self).original_buffer(offset);
                 let mut bytes = Bytes::from_vec(vec);
                 bytes.advance(offset);
                 bytes
             },
-            Err(_) => Bytes::from_mut(self.data, self),
+            Err(_) => Bytes::from_mut(self.data.as_ptr(), self),
         }
     }
 
@@ -689,8 +718,9 @@ impl BytesMut {
             "BytesMut::advance_unchecked out of bounds"
         );
 
-        if let Ok(offset) = shared::as_unpromoted(self.data) {
-            self.data = shared::mask_payload(self.data, offset + count);
+        if let Ok(offset) = shared::as_unpromoted_non_null(self.data) {
+            // SAFETY: `self.data` is unpromoted
+            self.data = unsafe { shared::mask_payload(self.data.as_ptr(), offset + count) };
 
             debug_assert!(offset + count < isize::MAX as usize);
         }
@@ -703,11 +733,11 @@ impl BytesMut {
     }
 
     fn shallow_clone(&mut self) -> Self {
-        match shared::as_unpromoted(self.data) {
+        match shared::as_unpromoted_non_null(self.data) {
             Ok(offset) => {
                 let vec = unsafe { self.original_buffer(offset) };
                 self.data = shared::promote_with_vec(vec, 2);
-                debug_assert!(shared::is_promoted(self.data));
+                debug_assert!(shared::is_promoted(self.data.as_ptr()));
             }
             Err(shared) => {
                 shared::increment(shared);
@@ -794,8 +824,8 @@ impl BytesMut {
         let ptr = unsafe { self.ptr.as_ptr().add(self.len) };
 
         if ptr == other.ptr.as_ptr()
-            && shared::is_promoted(self.data)
-            && shared::is_promoted(other.data)
+            && shared::is_promoted(self.data.as_ptr())
+            && shared::is_promoted(other.data.as_ptr())
         {
             self.len += other.len;
             self.cap += other.cap;
@@ -808,39 +838,10 @@ impl BytesMut {
 
 // ===== std traits =====
 
-impl Drop for BytesMut {
-    #[inline]
-    fn drop(&mut self) {
-        match shared::into_unpromoted(self.data) {
-            Ok(offset) => {
-                // SAFETY: to be drop
-                unsafe { drop(self.original_buffer(offset)) };
-            },
-            Err(shared) => {
-                shared::release(shared);
-            },
-        }
-    }
-}
-
-impl Clone for BytesMut {
-    #[inline]
-    fn clone(&self) -> Self {
-        Self::copy_from_slice(self.as_slice())
-    }
-}
-
 impl std::fmt::Debug for BytesMut {
     #[inline]
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         crate::fmt::lossy(&self.as_slice()).fmt(f)
-    }
-}
-
-impl Default for BytesMut {
-    #[inline]
-    fn default() -> Self {
-        Self::new()
     }
 }
 

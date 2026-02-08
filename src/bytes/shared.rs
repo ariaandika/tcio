@@ -1,4 +1,5 @@
-use std::{ptr::{self, NonNull}, sync::atomic::AtomicUsize};
+use std::ptr::{self, NonNull};
+use std::sync::atomic::AtomicUsize;
 
 /// even number alignment means the LSB is always unset
 ///
@@ -16,25 +17,25 @@ const _: [(); 1] = [(); RESERVED_BIT_DATA];
 
 #[derive(Debug)]
 pub struct Shared {
-    ref_count: AtomicUsize,
     ptr: NonNull<u8>,
     cap: usize,
+    ref_count: AtomicUsize,
 }
 
 impl Shared {
-    pub fn capacity(&self) -> usize {
+    pub const fn capacity(&self) -> usize {
         self.cap
     }
 
-    pub fn as_ptr(&self) -> *mut u8 {
+    pub const fn as_ptr(&self) -> *mut u8 {
         self.ptr.as_ptr()
     }
 }
 
 // ===== Arbitrary =====
 
-pub const fn new_unpromoted() -> *mut Shared {
-    ptr::null_mut::<u8>().wrapping_add(DATA_UNPROMOTED).cast()
+pub const fn new_unpromoted() -> NonNull<Shared> {
+    NonNull::new(ptr::null_mut::<u8>().wrapping_add(DATA_UNPROMOTED).cast()).expect("ptr is 1")
 }
 
 pub fn is_unpromoted(data: *const Shared) -> bool {
@@ -45,21 +46,15 @@ pub fn is_promoted(data: *const Shared) -> bool {
     data as usize & DATA_MASK == DATA_PROMOTED
 }
 
-/// Pointer cannot be null.
-///
-/// To skip pointer null check, use [`to_unpromoted`].
-pub fn as_unpromoted<'a>(data: *const Shared) -> Result<usize, &'a Shared> {
-    if is_unpromoted(data) {
-        Ok(data as usize >> RESERVED_BIT_DATA)
+pub fn as_unpromoted_non_null<'a>(data: NonNull<Shared>) -> Result<usize, &'a Shared> {
+    if is_unpromoted(data.as_ptr()) {
+        Ok(data.as_ptr() as usize >> RESERVED_BIT_DATA)
     } else {
-        debug_assert!(!data.is_null());
-        Err(unsafe { &*data })
+        Err(unsafe { data.as_ref() })
     }
 }
 
-/// In contrast with [`as_unpromoted`], the pointer may be null because it will not be
-/// dereferenced.
-pub fn to_unpromoted(data: *const Shared) -> Option<usize> {
+pub fn as_unpromoted(data: *const Shared) -> Option<usize> {
     if is_unpromoted(data) {
         Some(data as usize >> RESERVED_BIT_DATA)
     } else {
@@ -67,19 +62,19 @@ pub fn to_unpromoted(data: *const Shared) -> Option<usize> {
     }
 }
 
-pub fn as_unpromoted_mut<'a>(data: *mut Shared) -> Result<usize, &'a mut Shared> {
-    if is_unpromoted(data) {
-        Ok(data as usize >> RESERVED_BIT_DATA)
+pub fn as_unpromoted_mut<'a>(data: &mut NonNull<Shared>) -> Result<usize, &'a mut Shared> {
+    if is_unpromoted(data.as_ptr()) {
+        Ok(data.as_ptr() as usize >> RESERVED_BIT_DATA)
     } else {
-        Err(unsafe { &mut *data })
+        Err(unsafe { data.as_mut() })
     }
 }
 
-pub fn into_unpromoted(data: *mut Shared) -> Result<usize, Box<Shared>> {
-    if is_unpromoted(data) {
-        Ok(data as usize >> RESERVED_BIT_DATA)
+pub fn into_unpromoted(data: NonNull<Shared>) -> Result<usize, Box<Shared>> {
+    if is_unpromoted(data.as_ptr()) {
+        Ok(data.as_ptr() as usize >> RESERVED_BIT_DATA)
     } else {
-        Err(unsafe { Box::from_raw(data) })
+        Err(unsafe { Box::from_raw(data.as_ptr()) })
     }
 }
 
@@ -94,24 +89,29 @@ pub fn into_unpromoted(data: *mut Shared) -> Result<usize, Box<Shared>> {
 ///
 /// In other word, `0 <= value <= isize::MAX`.
 ///
-/// # Panics
+/// # Safety
 ///
-/// The most significant bit must be unset, otherwise panics.
-pub fn mask_payload(data: *mut Shared, value: usize) -> *mut Shared {
+/// `data` must be unpromoted.
+///
+/// `value` most significant bit must be unset.
+pub unsafe fn mask_payload(data: *mut Shared, value: usize) -> NonNull<Shared> {
     const MSB: usize = RESERVED_BIT_DATA.rotate_right(RESERVED_BIT_DATA as _);
 
-    assert!(is_unpromoted(data));
-    assert_eq!(value & MSB, 0);
+    debug_assert!(is_unpromoted(data));
+    debug_assert_eq!(value & MSB, 0);
 
-    data.with_addr((value << RESERVED_BIT_DATA) | DATA_UNPROMOTED)
+    // SAFETY: `| DATA_UNPROMOTED` will made the pointer nonnull
+    unsafe {
+        NonNull::new_unchecked(data.with_addr((value << RESERVED_BIT_DATA) | DATA_UNPROMOTED))
+    }
 }
 
-pub fn promote_with_vec(mut vec: Vec<u8>, ref_count: usize) -> *mut Shared {
+pub fn promote_with_vec(mut vec: Vec<u8>, ref_count: usize) -> NonNull<Shared> {
     let cap = vec.capacity();
     let ptr = unsafe { NonNull::new_unchecked(vec.as_mut_ptr()) };
 
     // prevent heap deallocation
-    let _vec = std::mem::ManuallyDrop::new(vec);
+    let _vec = vec.into_raw_parts();
 
     let shared = Shared {
         ref_count: AtomicUsize::new(ref_count),
@@ -119,7 +119,7 @@ pub fn promote_with_vec(mut vec: Vec<u8>, ref_count: usize) -> *mut Shared {
         cap,
     };
 
-    Box::into_raw(Box::new(shared))
+    NonNull::new(Box::into_raw(Box::new(shared))).expect("box pointer is nonnull")
 }
 
 // ===== Promoted =====

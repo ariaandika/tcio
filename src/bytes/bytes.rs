@@ -26,9 +26,9 @@ impl Drop for Bytes {
     fn drop(&mut self) {
         let shared = *self.data.get_mut();
 
-        if shared.is_null() {
+        let Some(shared) = NonNull::new(shared) else {
             return;
-        }
+        };
 
         match shared::into_unpromoted(shared) {
             Ok(offset) => {
@@ -99,7 +99,7 @@ impl Bytes {
         // if `capacity > len`
         if cap == len {
             let _ = vec.into_raw_parts();
-            let data = AtomicPtr::new(shared::new_unpromoted());
+            let data = AtomicPtr::new(shared::new_unpromoted().as_ptr());
             Self { ptr, len, data }
         } else {
             // PERF: we cannot start in unpromoted for `Shared` storage
@@ -112,7 +112,7 @@ impl Bytes {
             // - `into_boxed_slice`: reallocate and copy the bytes, as expensive as the vector length
             // - `shared::promote_with_vec`: allocate `AtomicUsize`, pointer, and capacity (3 word)
 
-            let data = AtomicPtr::new(shared::promote_with_vec(vec, 1));
+            let data = AtomicPtr::new(shared::promote_with_vec(vec, 1).as_ptr());
             Self { ptr, len, data }
         }
     }
@@ -121,7 +121,7 @@ impl Bytes {
         Self {
             len: boxed.len(),
             ptr: NonNull::new(Box::into_raw(boxed).cast()).expect("box cannot returns nullptr"),
-            data: AtomicPtr::new(shared::new_unpromoted()),
+            data: AtomicPtr::new(shared::new_unpromoted().as_ptr()),
         }
     }
 
@@ -414,8 +414,9 @@ impl Bytes {
 
         let data = *self.data.get_mut();
 
-        if let Some(offset) = shared::to_unpromoted(data) {
-            *self.data.get_mut() = shared::mask_payload(data, offset + count);
+        if let Some(offset) = shared::as_unpromoted(data) {
+            // SAFETY: `data` is unpromoted
+            *self.data.get_mut() = unsafe { shared::mask_payload(data, offset + count).as_ptr() };
         }
 
         unsafe {
@@ -590,11 +591,11 @@ impl Bytes {
     pub fn is_unique(&self) -> bool {
         let shared = self.data.load(Ordering::Relaxed);
 
-        if shared.is_null() {
+        let Some(shared) = NonNull::new(shared) else {
             return false;
-        }
+        };
 
-        match shared::as_unpromoted(shared) {
+        match shared::as_unpromoted_non_null(shared) {
             Ok(_) => true,
             Err(shared) => shared::is_unique(shared),
         }
@@ -603,24 +604,24 @@ impl Bytes {
     fn clone_inner(&self) -> Self {
         let shared = self.data.load(Ordering::Relaxed);
 
-        if shared.is_null() {
+        let Some(shared) = NonNull::new(shared) else {
             return Self {
                 ptr: self.ptr,
                 len: self.len,
                 data: AtomicPtr::new(std::ptr::null_mut()),
             };
-        }
+        };
 
-        match shared::as_unpromoted(shared) {
+        match shared::as_unpromoted_non_null(shared) {
             Ok(offset) => {
-                promote_ref(self, offset, shared)
+                promote_ref(self, offset, shared.as_ptr())
             }
             Err(shared_ref) => {
                 shared::increment(shared_ref);
                 Self {
                     ptr: self.ptr,
                     len: self.len,
-                    data: AtomicPtr::new(shared),
+                    data: AtomicPtr::new(shared.as_ptr()),
                 }
             }
         }
@@ -631,18 +632,18 @@ impl Bytes {
     fn clone_inner_mut(&mut self) -> Self {
         let shared = self.data.load(Ordering::Relaxed);
 
-        if shared.is_null() {
+        let Some(shared) = NonNull::new(shared) else {
             return Self {
                 ptr: self.ptr,
                 len: self.len,
                 data: AtomicPtr::new(std::ptr::null_mut()),
             };
-        }
+        };
 
-        let data = match shared::as_unpromoted(shared) {
+        let data = match shared::as_unpromoted_non_null(shared) {
             Ok(offset) => {
                 let vec = self.build_unpromoted_vec(offset);
-                let new_shared = shared::promote_with_vec(vec, 2);
+                let new_shared = shared::promote_with_vec(vec, 2).as_ptr();
 
                 // in contrast with `clone_inner`, we have exclusive `&mut self` means no promotion
                 // can happen concurrently
@@ -652,7 +653,7 @@ impl Bytes {
             },
             Err(shared_ref) => {
                 shared::increment(shared_ref);
-                shared
+                shared.as_ptr()
             },
         };
 
@@ -672,9 +673,9 @@ impl Bytes {
         let mut bytes = ManuallyDrop::new(self);
         let shared = *bytes.data.get_mut();
 
-        if shared.is_null() {
+        let Some(shared) = NonNull::new(shared) else {
             return bytes.as_slice().to_vec();
-        }
+        };
 
         let ptr = bytes.ptr.as_ptr();
 
@@ -724,9 +725,9 @@ impl Bytes {
         let mut bytes = ManuallyDrop::new(self);
         let shared = *bytes.data.get_mut();
 
-        if shared.is_null() {
+        let Some(shared) = NonNull::new(shared) else {
             return BytesMut::from_vec(bytes.as_slice().to_vec());
-        }
+        };
 
         let ptr = bytes.ptr.as_ptr();
 
@@ -777,7 +778,7 @@ impl Bytes {
 #[cold]
 fn promote_ref(me: &Bytes, offset: usize, shared: *mut Shared) -> Bytes {
     let vec = me.build_unpromoted_vec(offset);
-    let new_shared = shared::promote_with_vec(vec, 2);
+    let new_shared = shared::promote_with_vec(vec, 2).as_ptr();
 
     // because cloning is called via the `Clone` trait, which take `&self`, and `Bytes`
     // is `Sync`, cloning could happens concurrently
