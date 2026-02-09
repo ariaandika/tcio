@@ -228,6 +228,24 @@ pub trait Buf {
         Chain::new(self, next)
     }
 
+    /// Returns an array to the first `N` items in the buf.
+    ///
+    /// `self` is advanced by `N`.
+    ///
+    /// Returns `None` if `N > self.remaining()`.
+    #[inline]
+    fn try_get_chunk<const N: usize>(&mut self) -> Option<[u8; N]>
+    where
+        Self: Sized,
+    {
+        if N > self.remaining()  {
+            return None;
+        }
+        let mut chunk = [0u8; N];
+        self.copy_to_slice(&mut chunk[..]);
+        Some(chunk)
+    }
+
     /// Get `u8`.
     ///
     /// `self` is advanced by 1.
