@@ -1,5 +1,5 @@
 use std::cmp;
-use std::mem::{ManuallyDrop, MaybeUninit};
+use std::mem::MaybeUninit;
 use std::ptr::{self, NonNull};
 use std::slice;
 
@@ -126,29 +126,32 @@ impl BytesMut {
     /// This function does not allocate.
     #[inline]
     pub const fn new() -> Self {
-        BytesMut::from_vec(Vec::new())
+        Self {
+            ptr: NonNull::dangling(),
+            len: 0,
+            cap: 0,
+            data: shared::new_unpromoted(),
+        }
     }
 
     /// Create new empty [`BytesMut`] with at least specified capacity.
+    ///
+    /// If `capacity` is zero, this method will not allocate.
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
-        BytesMut::from_vec(Vec::with_capacity(capacity))
+        Self::from_vec(Vec::with_capacity(capacity))
     }
 
     /// Create new [`BytesMut`] by copying given bytes.
     #[inline]
-    pub fn copy_from_slice(slice: &[u8]) -> BytesMut {
-        BytesMut::from_vec(slice.to_vec())
+    pub fn copy_from_slice(slice: &[u8]) -> Self {
+        Self::from_vec(slice.to_vec())
     }
 
-    pub(crate) const fn from_vec(mut vec: Vec<u8>) -> BytesMut {
-        let len = vec.len();
-        let cap = vec.capacity();
-        let ptr = unsafe { NonNull::new_unchecked(vec.as_mut_ptr()) };
-        // prevent heap deallocation
-        let _vec = ManuallyDrop::new(vec);
-        BytesMut {
-            ptr,
+    pub(crate) fn from_vec(vec: Vec<u8>) -> Self {
+        let (ptr, len, cap) = vec.into_raw_parts();
+        Self {
+            ptr: NonNull::new(ptr).expect("vec cannot be null"),
             len,
             cap,
             data: shared::new_unpromoted(),
@@ -227,7 +230,7 @@ impl BytesMut {
     /// # Safety
     ///
     /// Ensure that nothing else uses the pointer after calling this function.
-    unsafe fn original_buffer(&self, offset: usize) -> Vec<u8> {
+    unsafe fn original_buffer(&mut self, offset: usize) -> Vec<u8> {
         unsafe {
             Vec::from_raw_parts(
                 self.ptr.as_ptr().sub(offset),
@@ -236,28 +239,49 @@ impl BytesMut {
             )
         }
     }
+
+    /// (ptr, len, cap, data)
+    fn into_raw_parts(self) -> (NonNull<u8>, usize, usize, NonNull<Shared>) {
+        let me = std::mem::ManuallyDrop::new(self);
+        (me.ptr, me.len, me.cap, me.data)
+    }
+}
+
+// ===== Allocation =====
+
+fn is_overflow(cap: usize, additional: usize) -> bool {
+    cap
+        .checked_add(additional)
+        .filter(|&e| e <= isize::MAX as usize)
+        .is_none()
 }
 
 impl BytesMut {
-    // ===== Allocation =====
-
     /// Reserves capacity for at least `additional` more bytes to be inserted.
     #[inline]
     pub fn reserve(&mut self, additional: usize) {
+        assert!(!is_overflow(self.cap, additional));
+        if additional == 0 {
+            return;
+        }
         if self.cap - self.len >= additional {
             return;
         }
-
         let _ = self.reserve_inner(additional, true);
     }
 
     /// Try to reclaim additional capacity without allocating.
     #[inline]
     pub fn try_reclaim(&mut self, additional: usize) -> bool {
+        if additional == 0 {
+            return true;
+        }
         if self.cap - self.len >= additional {
             return true;
         }
-
+        if is_overflow(self.cap, additional) {
+            return false;
+        }
         self.reserve_inner(additional, false)
     }
 
@@ -268,7 +292,6 @@ impl BytesMut {
             Ok(offset) => offset + (self.cap - self.len),
             Err(shared) => shared.capacity() - self.len,
         };
-
         self.reserve_inner(additional, false)
     }
 
@@ -276,12 +299,6 @@ impl BytesMut {
     ///
     /// The explanation is at the top of this file
     fn reserve_inner(&mut self, additional: usize, allocate: bool) -> bool {
-        if additional == 0 {
-            return true;
-        }
-
-        assert!(additional + self.cap <= isize::MAX as _);
-
         let ptr = self.ptr.as_ptr();
         let len = self.len;
 
@@ -316,8 +333,7 @@ impl BytesMut {
                     // `max(exponential, additional)`
                     let capacity = cmp::max(self.cap * 2, len + additional);
 
-                    let mut new_vec = ManuallyDrop::new(Vec::with_capacity(capacity));
-                    let new_ptr = new_vec.as_mut_ptr();
+                    let (new_ptr, _, new_cap) = Vec::with_capacity(capacity).into_raw_parts();
 
                     ptr::copy_nonoverlapping(ptr, new_ptr, len);
 
@@ -326,7 +342,7 @@ impl BytesMut {
 
 
                     self.ptr = NonNull::new_unchecked(new_ptr);
-                    self.cap = new_vec.capacity();
+                    self.cap = new_cap;
                     // reset the `offset`
                     self.data = shared::mask_payload(self.data.as_ptr(), 0);
                 }
@@ -381,8 +397,7 @@ impl BytesMut {
                     // follow `Vec::reserve` logic instead of `Vec::with_capacity`
                     let capacity = cmp::max(self.cap * 2, len + additional);
 
-                    let mut new_vec = ManuallyDrop::new(Vec::with_capacity(capacity));
-                    let new_ptr = new_vec.as_mut_ptr();
+                    let (new_ptr, _, new_cap) = Vec::with_capacity(capacity).into_raw_parts();
 
                     ptr::copy_nonoverlapping(ptr, new_ptr, len);
 
@@ -391,7 +406,7 @@ impl BytesMut {
                     shared::release(Box::from_raw(shared));
 
                     self.ptr = NonNull::new_unchecked(new_ptr);
-                    self.cap = new_vec.capacity();
+                    self.cap = new_cap;
                     self.data = shared::new_unpromoted();
 
                     true
@@ -401,9 +416,9 @@ impl BytesMut {
     }
 }
 
-impl BytesMut {
-    // ===== Read =====
+// ===== Read =====
 
+impl BytesMut {
     /// Advance [`BytesMut`] to given pointer.
     ///
     /// # Examples
@@ -457,7 +472,7 @@ impl BytesMut {
 
     /// Shortens the buffer, dropping the last `len` bytes and keeping the rest.
     ///
-    /// If `off` is greater or equal to the `BytesMut` length, this has no effect.
+    /// If `off` is greater or equal to the `BytesMut` length, this will clear the bytes.
     ///
     /// # Examples
     ///
@@ -469,9 +484,7 @@ impl BytesMut {
     /// ```
     #[inline]
     pub const fn truncate_off(&mut self, off: usize) {
-        if let Some(new_len) = self.len.checked_sub(off) {
-            self.len = new_len;
-        }
+        self.len = self.len.saturating_sub(off);
     }
 
     /// Clears the `BytesMut`, removing all bytes.
@@ -741,9 +754,9 @@ impl BytesMut {
     }
 }
 
-impl BytesMut {
-    // ===== Write =====
+// ===== Write =====
 
+impl BytesMut {
     /// Copy and append bytes to the `BytesMut`.
     ///
     /// # Examples
@@ -792,6 +805,7 @@ impl BytesMut {
     /// assert_eq!(&bytes, &b"Hello World!"[..]);
     /// assert_eq!(ptr, bytes.as_ptr());
     /// ```
+    #[inline]
     pub fn unsplit(&mut self, other: BytesMut) {
         if self.is_empty() {
             *self = other;
@@ -809,6 +823,7 @@ impl BytesMut {
     /// decrease a reference count, sets few indices and returns [`Ok`].
     ///
     /// Otherwise, it returns [`Err`] containing the same given `BytesMut`.
+    #[inline]
     pub fn try_unsplit(&mut self, other: BytesMut) -> Result<(), BytesMut> {
         if other.capacity() == 0 {
             return Ok(());
