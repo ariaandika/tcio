@@ -483,15 +483,8 @@ impl BytesMut {
     /// Converts `self` into an immutable [`Bytes`].
     #[inline]
     pub fn freeze(self) -> Bytes {
-        match shared::as_unpromoted_non_null(self.data) {
-            Ok(offset) => unsafe {
-                let vec = ManuallyDrop::new(self).original_buffer(offset);
-                let mut bytes = Bytes::from_vec(vec);
-                bytes.advance(offset);
-                bytes
-            },
-            Err(_) => Bytes::from_mut(self.data.as_ptr(), self),
-        }
+        let (ptr, len, cap, data) = self.into_raw_parts();
+        Bytes::from_bytes_mut(ptr, len, cap, data)
     }
 
     /// Removes the bytes from the current view, returning them in a new `BytesMut` handle.

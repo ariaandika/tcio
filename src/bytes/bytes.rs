@@ -125,13 +125,38 @@ impl Bytes {
         }
     }
 
-    pub(crate) fn from_mut(shared: *mut Shared, bytesm: BytesMut) -> Self {
-        debug_assert!(shared::is_promoted(shared));
-        let mut bytesm = ManuallyDrop::new(bytesm);
-        Self {
-            ptr: unsafe { NonNull::new_unchecked(bytesm.as_mut_ptr()) },
-            len: bytesm.len(),
-            data: AtomicPtr::new(shared),
+    /// Should only be used by `BytesMut`
+    pub(super) fn from_bytes_mut(ptr: NonNull<u8>, len: usize, cap: usize, data: NonNull<Shared>) -> Self {
+        match shared::as_unpromoted(data.as_ptr()) {
+            Some(offset) => {
+                // here `Bytes` will contains the entire buffer, then fix the offset and tail
+                // offset afterwards
+
+                // SAFETY: `offset` correctly represent offset from the first pointer in the
+                // allocation
+                let ptr = unsafe { ptr.sub(offset) };
+                let mut me = Self {
+                    ptr,
+                    len: cap,
+                    data: AtomicPtr::new(data.as_ptr()),
+                };
+                if offset != 0 {
+                    me.advance(offset);
+                }
+                if len < cap {
+                    // this introduce "tail offset",
+                    // which cannot be represented in unpromoted,
+                    // thus required to be promoted
+                    drop(me.split_off(len));
+                }
+                me
+            },
+            // in promoted state, the capacity is tracked in shared buffer
+            None => Self {
+                ptr,
+                len,
+                data: AtomicPtr::new(data.as_ptr()),
+            }
         }
     }
 }

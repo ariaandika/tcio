@@ -585,6 +585,14 @@ fn test_bytes_from_mut() {
     assert_eq!(vec.as_ptr(), ptr);
 }
 
+#[test]
+fn test_bytes_from_mut_truncated() {
+    let mut bufm = BytesMut::from(vec![4; 8]);
+    bufm.truncate(6);
+    let buf = Bytes::from(bufm);
+    assert_eq!(buf.as_slice(), &[4; 6]);
+}
+
 impl Bytes {
     #[cfg(test)]
     #[doc(hidden)]
