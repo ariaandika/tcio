@@ -63,41 +63,6 @@ fn test_bytes_mut_split_off() {
     assert_eq!(to.as_slice(), &DATA[5..]);
 }
 
-// Allocation
-
-#[test]
-fn test_bytes_mut_allocation() {
-    let mut buf = BytesMut::with_capacity(128);
-    let ptr = buf.as_ptr();
-    let cap = buf.capacity();
-    buf.extend_from_slice(DATA);
-
-    assert_eq!(buf.spare_capacity_mut().len(), cap - DATA.len());
-
-    buf.clear();
-    assert!(buf.try_reclaim_full());
-
-    assert_eq!(buf.spare_capacity_mut().len(), cap);
-    assert_eq!(buf.as_ptr(), ptr);
-}
-
-#[test]
-fn test_bytes_mut_promoted_allocation() {
-    let mut buf = BytesMut::with_capacity(128);
-    let ptr = buf.as_ptr();
-    let cap = buf.capacity();
-    buf.extend_from_slice(DATA);
-    drop(buf.split_off(buf.capacity()));
-
-    assert_eq!(buf.spare_capacity_mut().len(), cap - DATA.len());
-
-    buf.clear();
-    assert!(buf.try_reclaim_full());
-
-    assert_eq!(buf.spare_capacity_mut().len(), cap);
-    assert_eq!(buf.as_ptr(), ptr);
-}
-
 // Unsplit
 
 #[test]

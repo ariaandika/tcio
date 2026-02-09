@@ -288,40 +288,33 @@ impl Bytes {
     /// `subset` should be contained in `Bytes` content, otherwise panic.
     #[inline]
     pub fn slice_ref(&self, subset: &[u8]) -> Self {
-        self.slice_from_raw(subset.as_ptr(), subset.len())
-    }
-
-    /// Returns the shared subset of `Bytes` with given slice raw parts.
-    ///
-    /// # Panics
-    ///
-    /// The slice from `data` up to `len` should be contained in `Bytes` content, otherwise panic.
-    pub fn slice_from_raw(&self, data: *const u8, len: usize) -> Self {
-        let self_addr = self.ptr.addr().get();
-        let addr = data.addr();
-
-        // this checks that input end pointer is still within buffer range
-        assert!(
-            addr.checked_add(len).unwrap() <= self_addr + self.len,
-            "length out of bounds"
-        );
-
-        let offset = addr.checked_sub(self_addr).expect("pointer out of bounds");
-
-        // SAFETY: this is the same as input `data` just using
-        // usize offset to detach pointer provenance
-        let data = unsafe { self.ptr.add(offset) };
-
-        if len == 0 {
-            return Self::new_empty_with_ptr(data);
+        #[cfg_attr(not(panic = "immediate-abort"), inline(never), cold)]
+        #[cfg_attr(panic = "immediate-abort", inline)]
+        #[track_caller]
+        fn slice_failed() -> ! {
+            panic!("slice out of bounds");
         }
 
-        // with assert and checked sub,
-        // `data` is valid until `len` byte forward
+        if subset.is_empty() {
+            return Self::new_empty_with_ptr(self.ptr);
+        }
+
+        let self_addr = self.ptr.addr().get();
+        let addr = subset.as_ptr().addr();
+
+        // check end bounds
+        if addr + subset.len() > self_addr + self.len {
+            slice_failed();
+        }
+        // check start bounds
+        let Some(offset) = addr.checked_sub(self_addr) else {
+            slice_failed();
+        };
 
         let mut cloned = self.clone_inner();
-        cloned.ptr = data;
-        cloned.len = len;
+        // SAFETY: given slice is subset of self
+        cloned.ptr = unsafe { self.ptr.add(offset) };
+        cloned.len = subset.len();
         cloned
     }
 
@@ -395,38 +388,6 @@ impl Bytes {
         // SAFETY: cnt <= self.len
         unsafe {
             self.advance_unchecked(cnt);
-        }
-    }
-
-    /// Advance [`Bytes`] to given pointer.
-    ///
-    /// # Examples
-    ///
-    /// This method is intended to be used with other API that returns a slice.
-    ///
-    /// ```
-    /// # use tcio::bytes::Bytes;
-    /// # fn find_space(b: &[u8]) -> &[u8] { &b[6..] }
-    /// let mut bytes = Bytes::copy_from_slice(b"Hello World!");
-    /// let world: &[u8] = find_space(bytes.as_slice());
-    /// // SAFETY: `find_space` only returns slice within `bytes`
-    /// unsafe {
-    ///     bytes.advance_to_ptr(world.as_ptr())
-    /// }
-    /// assert_eq!(&bytes, &b"World!"[..]);
-    /// ```
-    ///
-    /// # Safety
-    ///
-    /// - The distance between the pointers must be non-negative (`ptr >= self.ptr`)
-    ///
-    /// - *All* the safety conditions of pointer's `offset_from`
-    ///   apply to this method as well; see it for the full details.
-    #[inline]
-    pub unsafe fn advance_to_ptr(&mut self, ptr: *const u8) {
-        // SAFETY: caller ensure cnt <= self.len, and all `offset_from_unsigned
-        unsafe {
-            self.advance_unchecked(ptr.offset_from_unsigned(self.ptr.as_ptr()));
         }
     }
 

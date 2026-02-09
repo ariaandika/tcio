@@ -485,72 +485,93 @@ fn test_bytes_shared_slice_ref() {
 }
 
 #[test]
-fn test_bytes_shared_slice_raw_unprovenance() {
-    let boxed = Box::new(b"Local111");
+fn test_bytes_shared_slice_ref_cloned() {
     let buf = Bytes::from(b"Content-Type".to_vec());
+    let mut buf2 = buf.clone();
 
-    let data = boxed.as_ptr().with_addr(buf.as_ptr().wrapping_add(3).addr());
-    let slice = buf.slice_from_raw(data, 5);
-    buf.assert_promoted();
+    buf2.advance(2);
+    buf2.truncate_off(2);
 
-    assert_eq!(slice.as_slice(), &buf[3..3 + 5]);
+    let slice = buf.slice_ref(&buf2);
+    assert_eq!(slice.as_slice(), buf2.as_slice());
 }
 
-// # OOB Cases
-//
+#[test]
+#[should_panic]
+fn test_bytes_shared_slice_ref_oob() {
+    let other = String::from("bruh");
+    let buf = Bytes::from(b"Content-Type".to_vec());
+    let _slice = buf.slice_ref(other.as_bytes());
+}
+
 // - Bytes:     [==]
 //   Range: [--]
-//
-// - Bytes:     [==]
-//   Range:   [--]
-//
-// - Bytes:     [==]
-//   Range:   [------]
-//
-// - Bytes:     [==]
-//   Range:       [--]
-//
-// - Bytes:     [==]
-//   Range:         [--]
-
 #[test]
 #[should_panic]
 fn test_bytes_shared_slice_raw_ptr_oob_1() {
-    let buf = Bytes::from(b"Content-Type".to_vec());
-    let data = buf.as_ptr().wrapping_sub(4);
-    let _slice = buf.slice_from_raw(data, 2);
+    let mut buf = Bytes::from(b"Content-Type".to_vec());
+    let mut buf2 = buf.clone();
+
+    buf.advance(4);
+    buf2.truncate(4);
+
+    let _slice = buf.slice_ref(&buf2);
 }
 
+// - Bytes:     [==]
+//   Range:   [--]
 #[test]
 #[should_panic]
 fn test_bytes_shared_slice_raw_ptr_oob_2() {
-    let buf = Bytes::from(b"Content-Type".to_vec());
-    let data = buf.as_ptr().wrapping_sub(4);
-    let _slice = buf.slice_from_raw(data, 6);
+    let mut buf = Bytes::from(b"Content-Type".to_vec());
+    let mut buf2 = buf.clone();
+
+    buf.advance(3);
+    buf2.truncate(5);
+
+    let _slice = buf.slice_ref(&buf2);
 }
 
+// - Bytes:     [==]
+//   Range:   [------]
 #[test]
 #[should_panic]
 fn test_bytes_shared_slice_raw_ptr_oob_3() {
-    let buf = Bytes::from(b"Content-Type".to_vec());
-    let data = buf.as_ptr().wrapping_sub(4);
-    let _slice = buf.slice_from_raw(data, buf.len() + 8);
+    let mut buf = Bytes::from(b"Content-Type".to_vec());
+    let buf2 = buf.clone();
+
+    buf.advance(4);
+    buf.truncate_off(4);
+
+    let _slice = buf.slice_ref(&buf2);
 }
 
+// - Bytes:     [==]
+//   Range:       [--]
 #[test]
 #[should_panic]
 fn test_bytes_shared_slice_raw_ptr_oob_4() {
-    let buf = Bytes::from(b"Content-Type".to_vec());
-    let data = buf.as_ptr().wrapping_add(4);
-    let _slice = buf.slice_from_raw(data, buf.len());
+    let mut buf = Bytes::from(b"Content-Type".to_vec());
+    let mut buf2 = buf.clone();
+
+    buf.truncate(4);
+    buf2.advance(2);
+
+    let _slice = buf.slice_ref(&buf2);
 }
 
+// - Bytes:     [==]
+//   Range:         [--]
 #[test]
 #[should_panic]
 fn test_bytes_shared_slice_raw_ptr_oob_5() {
-    let buf = Bytes::from(b"Content-Type".to_vec());
-    let data = buf.as_ptr().wrapping_add(buf.len());
-    let _slice = buf.slice_from_raw(data, buf.len() + 8);
+    let mut buf = Bytes::from(b"Content-Type".to_vec());
+    let mut buf2 = buf.clone();
+
+    buf.truncate(4);
+    buf2.advance(4);
+
+    let _slice = buf.slice_ref(&buf2);
 }
 
 // ...

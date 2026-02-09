@@ -40,7 +40,7 @@ impl ByteStr {
     /// otherwise this function will panic.
     #[inline]
     pub fn from_slice_of(subset: &str, bytes: &Bytes) -> Self {
-        Self { bytes: bytes.slice_from_raw(subset.as_ptr(), subset.len()) }
+        Self { bytes: bytes.slice_ref(subset.as_bytes()) }
     }
 
     /// Converts a [`Bytes`] to a [`ByteStr`] without checking that the string contains valid

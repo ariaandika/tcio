@@ -285,16 +285,6 @@ impl BytesMut {
         self.reserve_inner(additional, false)
     }
 
-    /// Try to reclaim all leftover capacity without allocating.
-    #[inline]
-    pub fn try_reclaim_full(&mut self) -> bool {
-        let additional = match shared::as_unpromoted_non_null(self.data) {
-            Ok(offset) => offset + (self.cap - self.len),
-            Err(shared) => shared.capacity() - self.len,
-        };
-        self.reserve_inner(additional, false)
-    }
-
     /// Try to gain capacity without allocation
     ///
     /// The explanation is at the top of this file
@@ -419,38 +409,6 @@ impl BytesMut {
 // ===== Read =====
 
 impl BytesMut {
-    /// Advance [`BytesMut`] to given pointer.
-    ///
-    /// # Examples
-    ///
-    /// This method is intended to be used with other API that returns a slice.
-    ///
-    /// ```
-    /// # use tcio::bytes::BytesMut;
-    /// # fn find_delimiter(b: &[u8]) -> &[u8] { &b[9..] }
-    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
-    /// let host: &[u8] = find_delimiter(bytes.as_slice());
-    /// // SAFETY: `find_delimiter` only returns slice within `bytes`
-    /// unsafe {
-    ///     bytes.advance_to_ptr(host.as_ptr())
-    /// }
-    /// assert_eq!(&bytes, &b"example.com"[..]);
-    /// ```
-    ///
-    /// # Safety
-    ///
-    /// - The distance between the pointers must be non-negative (`ptr >= self.ptr`)
-    ///
-    /// - *All* the safety conditions of pointer's `offset_from`
-    ///   apply to this method as well; see it for the full details.
-    #[inline]
-    pub unsafe fn advance_to_ptr(&mut self, ptr: *const u8) {
-        // SAFETY: caller ensure cnt <= self.len, and all `offset_from_unsigned
-        unsafe {
-            self.advance_unchecked(ptr.offset_from_unsigned(self.ptr.as_ptr()));
-        }
-    }
-
     /// Shortens the buffer, keeping the first `len` bytes and dropping the rest.
     ///
     /// If `len` is greater or equal to the `BytesMut` length, this has no effect.
@@ -578,43 +536,11 @@ impl BytesMut {
             return None;
         }
         let mut clone = self.shallow_clone();
-        unsafe {
-            // `at <= self.len`, and `self.len <= self.cap`
-            self.advance_unchecked(at);
-        }
+        // SAFETY: `at <= self.len <= self.cap`
+        unsafe { self.advance_unchecked(at) };
         clone.cap = at;
         clone.len = at;
         Some(clone)
-    }
-
-    /// Splits `BytesMut` into two at the given pointer.
-    ///
-    /// Afterwards `self` contains elements `[ptr, ptr + len)`, and the returned `BytesMut` contains
-    /// elements `[0, ptr)`.
-    ///
-    /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use tcio::bytes::BytesMut;
-    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
-    /// let (lead, rest): (&[u8], &[u8]) = bytes.split_at(8);
-    ///
-    /// assert_eq!(lead, &b"userinfo"[..]);
-    /// assert_eq!(rest, &b"@example.com"[..]);
-    ///
-    /// let lead: BytesMut = bytes.split_to_ptr(rest.as_ptr());
-    ///
-    /// assert_eq!(&lead, &b"userinfo"[..]);
-    /// assert_eq!(&bytes, &b"@example.com"[..]);
-    /// ```
-    #[inline]
-    pub fn split_to_ptr(&mut self, ptr: *const u8) -> BytesMut {
-        match ptr.addr().checked_sub(self.ptr.addr().get()) {
-            Some(at) => self.split_to(at),
-            None => panic!("split out of bounds")
-        }
     }
 
     /// Splits `BytesMut` into two at the given index.
@@ -681,34 +607,6 @@ impl BytesMut {
         self.cap = at;
         self.len = cmp::min(self.len, at); // could advance pass `self.len`
         Some(other)
-    }
-
-    /// Splits `BytesMut` into two at the given index.
-    ///
-    /// Afterwards `self` contains elements `[0, ptr)`, and the returned `BytesMut` contains
-    /// elements `[ptr, capacity)`.
-    ///
-    /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use tcio::bytes::BytesMut;
-    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
-    /// let (lead, rest): (&[u8], &[u8]) = bytes.split_at(8);
-    /// assert_eq!(lead, &b"userinfo"[..]);
-    /// assert_eq!(rest, &b"@example.com"[..]);
-    ///
-    /// let rest: BytesMut = bytes.split_off_ptr(rest.as_ptr());
-    /// assert_eq!(&bytes, &b"userinfo"[..]);
-    /// assert_eq!(&rest, &b"@example.com"[..]);
-    /// ```
-    #[inline]
-    pub fn split_off_ptr(&mut self, ptr: *const u8) -> BytesMut {
-        match ptr.addr().checked_sub(self.ptr.addr().get()) {
-            Some(at) => self.split_off(at),
-            None => panic!("BytesMut::split_off_ptr out of bounds")
-        }
     }
 
     /// # Safety
