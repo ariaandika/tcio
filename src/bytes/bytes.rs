@@ -25,18 +25,12 @@ unsafe impl Sync for Bytes {}
 impl Drop for Bytes {
     fn drop(&mut self) {
         let shared = *self.data.get_mut();
-
         let Some(shared) = NonNull::new(shared) else {
             return;
         };
-
         match shared::into_unpromoted(shared) {
-            Ok(offset) => {
-                let _ = self.build_unpromoted_vec(offset);
-            }
-            Err(shared) => {
-                shared::release(shared);
-            }
+            Ok(offset) => drop(self.build_unpromoted_vec(offset)),
+            Err(shared) => shared::release(shared),
         }
     }
 }
@@ -45,13 +39,6 @@ impl Default for Bytes {
     #[inline]
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl Clone for Bytes {
-    #[inline]
-    fn clone(&self) -> Self {
-        self.clone_inner()
     }
 }
 
@@ -83,48 +70,72 @@ impl Bytes {
     /// Create new [`Bytes`] by copying given bytes.
     #[inline]
     pub fn copy_from_slice(data: &[u8]) -> Self {
-        Self::from_vec(data.to_vec())
+        if data.is_empty() {
+            return Self::new();
+        }
+        let (ptr, len, _) = data.to_vec().into_raw_parts();
+        let ptr = NonNull::new(ptr).expect("vec cannot be null");
+        let data = AtomicPtr::new(shared::new_unpromoted().as_ptr());
+        Self { ptr, len, data }
     }
 
-    pub(crate) fn from_vec(mut vec: Vec<u8>) -> Self {
+    /// Specialized empty `Bytes` with given pointer.
+    ///
+    /// This is used when split and resulting in empty `Bytes` that does not need to increment the
+    /// atomic counter.
+    fn new_empty_with_ptr(ptr: NonNull<u8>) -> Self {
+        Self {
+            ptr,
+            len: 0,
+            data: AtomicPtr::new(ptr::null_mut()),
+        }
+    }
+}
+
+impl From<Vec<u8>> for Bytes {
+    #[inline]
+    fn from(mut vec: Vec<u8>) -> Self {
         if vec.is_empty() {
             return Self::new();
         }
 
-        let ptr = NonNull::new(vec.as_mut_ptr()).expect("vec cannot return nullptr");
+        let ptr = NonNull::new(vec.as_mut_ptr()).expect("vec cannot be null");
         let len = vec.len();
         let cap = vec.capacity();
 
-        // `into_boxed_slice`, which call `shrink_to_fit` will only reallocate
-        // if `capacity > len`
         if cap == len {
+            // this is the ideal form, `len` and `cap` can be stored in single field
             let _ = vec.into_raw_parts();
             let data = AtomicPtr::new(shared::new_unpromoted().as_ptr());
             Self { ptr, len, data }
         } else {
-            // PERF: we cannot start in unpromoted for `Shared` storage
-            // Problems:
+            // we cannot start in unpromoted for `Shared` storage
             // - we have nowhere to store capacity of the vector
             // - the `data` field already contains the offset from the start ptr
             // - if `len < cap`, there is a "tail offset", thus
             //   `len` cannot be treated as capacity
-            // Consideration:
-            // - `into_boxed_slice`: reallocate and copy the bytes, as expensive as the vector length
+            // Current methods:
             // - `shared::promote_with_vec`: allocate `AtomicUsize`, pointer, and capacity (3 word)
-
+            // Alternative:
+            // - `into_boxed_slice`: reallocate and copy the bytes, as expensive as the vector length
             let data = AtomicPtr::new(shared::promote_with_vec(vec, 1).as_ptr());
             Self { ptr, len, data }
         }
     }
+}
 
-    fn from_box(boxed: Box<[u8]>) -> Self {
+impl From<Box<[u8]>> for Bytes {
+    #[inline]
+    fn from(value: Box<[u8]>) -> Self {
         Self {
-            len: boxed.len(),
-            ptr: NonNull::new(Box::into_raw(boxed).cast()).expect("box cannot returns nullptr"),
+            len: value.len(),
+            ptr: NonNull::new(Box::into_raw(value).cast()).expect("box cannot be null"),
             data: AtomicPtr::new(shared::new_unpromoted().as_ptr()),
         }
     }
+}
 
+impl Bytes {
     /// Should only be used by `BytesMut`
     pub(super) fn from_bytes_mut(ptr: NonNull<u8>, len: usize, cap: usize, data: NonNull<Shared>) -> Self {
         match shared::as_unpromoted(data.as_ptr()) {
@@ -191,18 +202,6 @@ impl Bytes {
 
     // private
 
-    /// Specialized empty `Bytes` with given pointer.
-    ///
-    /// This is used when split and resulting in empty `Bytes` that does not need to increment the
-    /// atomic counter.
-    fn new_empty_with_ptr(ptr: NonNull<u8>) -> Self {
-        Self {
-            ptr,
-            len: 0,
-            data: AtomicPtr::new(ptr::null_mut()),
-        }
-    }
-
     #[cfg(test)]
     #[doc(hidden)]
     pub(crate) fn data(&self) -> &AtomicPtr<Shared> {
@@ -266,7 +265,7 @@ impl Bytes {
         if len == 0 {
             return Some(Bytes::new_empty_with_ptr(ptr));
         }
-        let mut cloned = self.clone_inner();
+        let mut cloned = self.clone();
         cloned.ptr = ptr;
         cloned.len = len;
         Some(cloned)
@@ -311,7 +310,7 @@ impl Bytes {
             slice_failed();
         };
 
-        let mut cloned = self.clone_inner();
+        let mut cloned = self.clone();
         // SAFETY: given slice is subset of self
         cloned.ptr = unsafe { self.ptr.add(offset) };
         cloned.len = subset.len();
@@ -335,14 +334,15 @@ impl Bytes {
         if len >= self.len {
             return;
         }
-        if self.data.get_mut().is_null() {
-            self.len = len;
-            return;
-        }
         // this introduce "tail offset",
         // which cannot be represented in unpromoted,
         // thus required to be promoted
-        drop(self.split_off(len));
+        let data = *self.data.get_mut();
+        if !data.is_null() && let Some(offset) = shared::as_unpromoted(data) {
+            let vec = self.build_unpromoted_vec(offset);
+            *self.data.get_mut() = shared::promote_with_vec(vec, 1).as_ptr();
+        }
+        self.len = len;
     }
 
     /// Shortens the buffer, dropping the last `off` bytes and keeping the rest.
@@ -384,11 +384,8 @@ impl Bytes {
     #[inline]
     pub fn advance(&mut self, cnt: usize) {
         assert!(cnt <= self.len, "out of bounds");
-
         // SAFETY: cnt <= self.len
-        unsafe {
-            self.advance_unchecked(cnt);
-        }
+        unsafe { self.advance_unchecked(cnt) };
     }
 
     pub(crate) unsafe fn advance_unchecked(&mut self, count: usize) {
@@ -405,9 +402,8 @@ impl Bytes {
             *self.data.get_mut() = unsafe { shared::mask_payload(data, offset + count).as_ptr() };
         }
 
-        unsafe {
-            self.ptr = self.ptr.add(count); // fn precondition
-        }
+        // SAFETY: caller ensure `count <= self.len`, and `ptr` is valid until `self.cap` forward
+        unsafe { self.ptr = self.ptr.add(count) };
 
         self.len -= count;
     }
@@ -485,7 +481,7 @@ impl Bytes {
             return Some(mem::replace(self, Bytes::new_empty_with_ptr(self.ptr)));
         }
 
-        let mut clone = self.clone_inner_mut();
+        let mut clone = self.clone_mut();
         clone.advance(at);
         self.len = at;
         Some(clone)
@@ -560,7 +556,7 @@ impl Bytes {
             return Some(Bytes::new_empty_with_ptr(self.ptr));
         }
 
-        let mut clone = self.clone_inner_mut();
+        let mut clone = self.clone_mut();
         self.advance(at);
         clone.len = at;
         Some(clone)
@@ -569,25 +565,9 @@ impl Bytes {
 
 // ===== Atomic Operations =====
 
-impl Bytes {
-    /// Returns `true` if `Bytes` is the only handle in a shared buffer.
-    ///
-    /// `Bytes` constructed from [`Bytes::from_static`] will always returns `false`.
+impl Clone for Bytes {
     #[inline]
-    pub fn is_unique(&self) -> bool {
-        let shared = self.data.load(Ordering::Relaxed);
-
-        let Some(shared) = NonNull::new(shared) else {
-            return false;
-        };
-
-        match shared::as_unpromoted_non_null(shared) {
-            Ok(_) => true,
-            Err(shared) => shared::is_unique(shared),
-        }
-    }
-
-    fn clone_inner(&self) -> Self {
+    fn clone(&self) -> Self {
         let shared = self.data.load(Ordering::Relaxed);
 
         let Some(shared) = NonNull::new(shared) else {
@@ -612,10 +592,29 @@ impl Bytes {
             }
         }
     }
+}
 
-    /// Like `clone_inner`, but because it have exclusive `&mut self`, promotion guaranteed to be
-    /// exclusive thus skip atomic operation
-    fn clone_inner_mut(&mut self) -> Self {
+impl Bytes {
+    /// Returns `true` if `Bytes` is the only handle in a shared buffer.
+    ///
+    /// `Bytes` constructed from [`Bytes::from_static`] will always returns `false`.
+    #[inline]
+    pub fn is_unique(&self) -> bool {
+        let shared = self.data.load(Ordering::Relaxed);
+
+        let Some(shared) = NonNull::new(shared) else {
+            return false;
+        };
+
+        match shared::as_unpromoted_non_null(shared) {
+            Ok(_) => true,
+            Err(shared) => shared::is_unique(shared),
+        }
+    }
+
+    /// Like `clone`, but because it have exclusive `&mut self`, promotion guaranteed to be
+    /// exclusive and skip atomic operation.
+    fn clone_mut(&mut self) -> Self {
         let shared = self.data.load(Ordering::Relaxed);
 
         let Some(shared) = NonNull::new(shared) else {
@@ -634,7 +633,6 @@ impl Bytes {
                 // in contrast with `clone_inner`, we have exclusive `&mut self` means no promotion
                 // can happen concurrently
                 *self.data.get_mut() = new_shared;
-
                 new_shared
             },
             Err(shared_ref) => {
@@ -696,7 +694,7 @@ impl Bytes {
                 }
             }
         }
-        // we handle advancing to equal with `len`,
+        // we handle advancing to make it equal with `len`,
         // thus `len` bytes are initialized
         unsafe { vec.set_len(len) };
         vec
@@ -836,9 +834,7 @@ crate::macros::from! {
     impl Bytes;
     fn from(value: &'static [u8]) { Self::from_static(value) }
     fn from(value: &'static str) { Self::from_static(value.as_bytes()) }
-    fn from(value: Box<[u8]>) { Self::from_box(value) }
-    fn from(value: Vec<u8>) { Self::from_vec(value) }
-    fn from(value: String) { Self::from_vec(value.into_bytes()) }
+    fn from(value: String) { Self::from(value.into_bytes()) }
     fn from(value: BytesMut) { value.freeze() }
 }
 
