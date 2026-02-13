@@ -29,7 +29,7 @@ impl Drop for Bytes {
             return;
         };
         match shared::into_unpromoted(shared) {
-            Ok(offset) => drop(self.build_unpromoted_vec(offset)),
+            Ok(offset) => drop(shared::build_vec(self.ptr, self.len, offset)),
             Err(shared) => shared::release(shared),
         }
     }
@@ -94,18 +94,12 @@ impl Bytes {
 
 impl From<Vec<u8>> for Bytes {
     #[inline]
-    fn from(mut vec: Vec<u8>) -> Self {
-        if vec.is_empty() {
-            return Self::new();
-        }
-
-        let ptr = NonNull::new(vec.as_mut_ptr()).expect("vec cannot be null");
-        let len = vec.len();
-        let cap = vec.capacity();
+    fn from(vec: Vec<u8>) -> Self {
+        let (ptr, len, cap) = vec.into_raw_parts();
+        let ptr = NonNull::new(ptr).expect("vec cannot be null");
 
         if cap == len {
             // this is the ideal form, `len` and `cap` can be stored in single field
-            let _ = vec.into_raw_parts();
             let data = AtomicPtr::new(shared::new_unpromoted().as_ptr());
             Self { ptr, len, data }
         } else {
@@ -118,7 +112,7 @@ impl From<Vec<u8>> for Bytes {
             // - `shared::promote_with_vec`: allocate `AtomicUsize`, pointer, and capacity (3 word)
             // Alternative:
             // - `into_boxed_slice`: reallocate and copy the bytes, as expensive as the vector length
-            let data = AtomicPtr::new(shared::promote_with_vec(vec, 1).as_ptr());
+            let data = AtomicPtr::new(shared::promote_with(ptr, cap, 0, 1).as_ptr());
             Self { ptr, len, data }
         }
     }
@@ -339,8 +333,7 @@ impl Bytes {
         // thus required to be promoted
         let data = *self.data.get_mut();
         if !data.is_null() && let Some(offset) = shared::as_unpromoted(data) {
-            let vec = self.build_unpromoted_vec(offset);
-            *self.data.get_mut() = shared::promote_with_vec(vec, 1).as_ptr();
+            *self.data.get_mut() = shared::promote_with(self.ptr, self.len, offset, 1).as_ptr();
         }
         self.len = len;
     }
@@ -627,11 +620,9 @@ impl Bytes {
 
         let data = match shared::as_unpromoted_non_null(shared) {
             Ok(offset) => {
-                let vec = self.build_unpromoted_vec(offset);
-                let new_shared = shared::promote_with_vec(vec, 2).as_ptr();
-
-                // in contrast with `clone_inner`, we have exclusive `&mut self` means no promotion
-                // can happen concurrently
+                let new_shared = shared::promote_with(self.ptr, self.len, offset, 2).as_ptr();
+                // in contrast with `clone`, we have exclusive `&mut self` thus no promotion can
+                // happen concurrently
                 *self.data.get_mut() = new_shared;
                 new_shared
             },
@@ -654,49 +645,49 @@ impl Bytes {
     ///
     /// Otherwise, the buffer is copied to new allocation.
     pub fn into_vec(self) -> Vec<u8> {
-        let mut bytes = ManuallyDrop::new(self);
-        let shared = *bytes.data.get_mut();
+        let mut me = ManuallyDrop::new(self);
+        let shared = *me.data.get_mut();
 
         let Some(shared) = NonNull::new(shared) else {
-            return bytes.as_slice().to_vec();
+            return me.as_slice().to_vec();
         };
 
-        let ptr = bytes.ptr.as_ptr();
-
-        let (advanced, mut vec) = match shared::into_unpromoted(shared) {
-            Ok(offset) => (offset, bytes.build_unpromoted_vec(offset)),
+        let (offset, mut vec) = match shared::into_unpromoted(shared) {
+            Ok(offset) => (offset, shared::build_vec(me.ptr, me.len, offset)),
             Err(shared) => {
-                let base_ptr = shared.as_ptr();
+                let base_ptr = shared.as_non_null();
                 let cap = shared.capacity();
                 unsafe {
                     match shared::release_into_vec(shared, cap) {
-                        Some(vec) => (ptr.offset_from_unsigned(base_ptr), vec),
+                        Some(vec) => (me.ptr.offset_from_unsigned(base_ptr), vec),
                         None => {
                             // skip handling the `advance` below if we can directly copy
                             // the correct range
-                            return bytes.as_slice().to_vec();
+                            return me.as_slice().to_vec();
                         }
                     }
                 }
             }
         };
 
-        let len = bytes.len;
-
-        if advanced != 0 {
+        if offset != 0 {
             // `Bytes` has been `advanced`, `Vec` cannot represent that,
             // so we can only copy the buffer backwards
+            let Bytes { ptr, len, .. } = *me;
+            let ptr = ptr.as_ptr();
+            let vec_ptr = vec.as_mut_ptr();
+
             unsafe {
-                if advanced >= len {
-                    ptr::copy_nonoverlapping(ptr, vec.as_mut_ptr(), len);
+                if offset >= len {
+                    ptr::copy_nonoverlapping(ptr, vec_ptr, len);
                 } else {
-                    ptr::copy(ptr, vec.as_mut_ptr(), len);
+                    ptr::copy(ptr, vec_ptr, len);
                 }
             }
         }
         // we handle advancing to make it equal with `len`,
         // thus `len` bytes are initialized
-        unsafe { vec.set_len(len) };
+        unsafe { vec.set_len(me.len) };
         vec
     }
 
@@ -706,63 +697,55 @@ impl Bytes {
     ///
     /// Otherwise, the buffer is copied to new allocation.
     pub fn into_mut(self) -> BytesMut {
-        let mut bytes = ManuallyDrop::new(self);
-        let shared = *bytes.data.get_mut();
+        let mut me = ManuallyDrop::new(self);
+        let shared = *me.data.get_mut();
 
         let Some(shared) = NonNull::new(shared) else {
-            return BytesMut::from_vec(bytes.as_slice().to_vec());
+            return BytesMut::from_vec(me.as_slice().to_vec());
         };
-
-        let ptr = bytes.ptr.as_ptr();
 
         match shared::into_unpromoted(shared) {
             Ok(offset) => {
-                let mut bufm = BytesMut::from_vec(bytes.build_unpromoted_vec(offset));
+                let mut bufm = BytesMut::from_vec(shared::build_vec(me.ptr, me.len, offset));
                 unsafe {
                     // in contrast with `Vec`, `BytesMut` can represent `advance`,
                     // so no copying is required
                     bufm.advance_unchecked(offset);
+                    // `build_vec` returns zero length vec
+                    bufm.set_len(me.len);
                 }
                 bufm
             }
             Err(shared) => {
-                let base_ptr = shared.as_ptr();
+                let base_ptr = shared.as_non_null();
                 let cap = shared.capacity();
                 match unsafe { shared::release_into_vec(shared, cap) } {
                     Some(vec) => {
                         let mut bufm = BytesMut::from_vec(vec);
                         unsafe {
                             // handle head offset
-                            bufm.advance_unchecked(ptr.offset_from_unsigned(base_ptr));
+                            bufm.advance_unchecked(me.ptr.offset_from_unsigned(base_ptr));
                             // handle tail offset
-                            bufm.set_len(bytes.len);
+                            bufm.set_len(me.len);
                         }
                         bufm
                     }
-                    None => BytesMut::from_vec(bytes.as_slice().to_vec()),
+                    None => BytesMut::from_vec(me.as_slice().to_vec()),
                 }
             }
-        }
-    }
-
-    fn build_unpromoted_vec(&self, offset: usize) -> Vec<u8> {
-        unsafe {
-            let base_ptr = self.ptr.sub(offset).as_ptr();
-            let len = self.len + offset;
-
-            // unpromoted will not represent tail offset, it will be promoted beforehand,
-            // thus it is the same as full length vector
-            Vec::from_raw_parts(base_ptr, len, len)
         }
     }
 }
 
 // this function marked cold because promotion in `Bytes` is rare, the common way to create `Bytes`
 // is from `BytesMut` splitting and freeze, which is already promoted
+//
+// this function marked as inline(never) to not bloat the potentially inlined `Clone`
+// implementation
+#[inline(never)]
 #[cold]
 fn promote_ref(me: &Bytes, offset: usize, shared: *mut Shared) -> Bytes {
-    let vec = me.build_unpromoted_vec(offset);
-    let new_shared = shared::promote_with_vec(vec, 2).as_ptr();
+    let new_shared = shared::promote_with(me.ptr, me.len, offset, 2).as_ptr();
 
     // because cloning is called via the `Clone` trait, which take `&self`, and `Bytes`
     // is `Sync`, cloning could happens concurrently

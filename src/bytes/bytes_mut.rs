@@ -95,13 +95,8 @@ impl Drop for BytesMut {
     #[inline]
     fn drop(&mut self) {
         match shared::into_unpromoted(self.data) {
-            Ok(offset) => {
-                // SAFETY: to be drop
-                unsafe { drop(self.original_buffer(offset)) };
-            },
-            Err(shared) => {
-                shared::release(shared);
-            },
+            Ok(offset) => drop(shared::build_vec(self.ptr, self.cap, offset)),
+            Err(shared) => shared::release(shared),
         }
     }
 }
@@ -225,21 +220,6 @@ impl BytesMut {
 
     // private
 
-    /// Consume `self.data` into owned `Vec<u8>`.
-    ///
-    /// # Safety
-    ///
-    /// Ensure that nothing else uses the pointer after calling this function.
-    unsafe fn original_buffer(&mut self, offset: usize) -> Vec<u8> {
-        unsafe {
-            Vec::from_raw_parts(
-                self.ptr.as_ptr().sub(offset),
-                self.len + offset,
-                self.cap + offset,
-            )
-        }
-    }
-
     /// (ptr, len, cap, data)
     fn into_raw_parts(self) -> (NonNull<u8>, usize, usize, NonNull<Shared>) {
         let me = std::mem::ManuallyDrop::new(self);
@@ -328,7 +308,7 @@ impl BytesMut {
                     ptr::copy_nonoverlapping(ptr, new_ptr, len);
 
                     // drop the original buffer *after* copy
-                    drop(self.original_buffer(offset));
+                    drop(shared::build_vec(self.ptr, self.cap, offset));
 
 
                     self.ptr = NonNull::new_unchecked(new_ptr);
@@ -639,9 +619,7 @@ impl BytesMut {
     fn shallow_clone(&mut self) -> Self {
         match shared::as_unpromoted_non_null(self.data) {
             Ok(offset) => {
-                let vec = unsafe { self.original_buffer(offset) };
-                self.data = shared::promote_with_vec(vec, 2);
-                debug_assert!(shared::is_promoted(self.data.as_ptr()));
+                self.data = shared::promote_with(self.ptr, self.cap, offset, 2);
             }
             Err(shared) => {
                 shared::increment(shared);

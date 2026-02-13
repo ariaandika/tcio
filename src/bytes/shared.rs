@@ -30,6 +30,10 @@ impl Shared {
     pub const fn as_ptr(&self) -> *mut u8 {
         self.ptr.as_ptr()
     }
+
+    pub const fn as_non_null(&self) -> NonNull<u8> {
+        self.ptr
+    }
 }
 
 // ===== Arbitrary =====
@@ -106,20 +110,17 @@ pub unsafe fn mask_payload(data: *mut Shared, value: usize) -> NonNull<Shared> {
     }
 }
 
-pub fn promote_with_vec(mut vec: Vec<u8>, ref_count: usize) -> NonNull<Shared> {
-    let cap = vec.capacity();
-    let ptr = unsafe { NonNull::new_unchecked(vec.as_mut_ptr()) };
+pub fn build_vec(ptr: NonNull<u8>, cap: usize, offset: usize) -> Vec<u8> {
+    unsafe { Vec::from_raw_parts(ptr.as_ptr().sub(offset), 0, cap + offset) }
+}
 
-    // prevent heap deallocation
-    let _vec = vec.into_raw_parts();
-
-    let shared = Shared {
+pub fn promote_with(ptr: NonNull<u8>, cap: usize, offset: usize, ref_count: usize) -> NonNull<Shared> {
+    NonNull::new(Box::into_raw(Box::new(Shared {
         ref_count: AtomicUsize::new(ref_count),
-        ptr,
-        cap,
-    };
-
-    NonNull::new(Box::into_raw(Box::new(shared))).expect("box pointer is nonnull")
+        ptr: unsafe { ptr.sub(offset) },
+        cap: cap + offset,
+    })))
+    .expect("box cannot be null")
 }
 
 // ===== Promoted =====
