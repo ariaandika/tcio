@@ -158,13 +158,25 @@ pub fn increment(shared: &Shared) {
 
 #[allow(clippy::boxed_local, reason = "`Shared` always in the heap")]
 pub fn release(shared: Box<Shared>) {
+    // SAFETY: `release_into_vec` with `0` will always safe
+    unsafe { self::release_into_vec(shared, 0) };
+}
+
+/// Release the `Shared` handle, if the reference is unique, returns the underlying buffer with
+/// given length of initialized data.
+///
+/// # Safety
+///
+/// Caller must ensure that `len` of data is initialized.
+#[allow(clippy::boxed_local, reason = "`Shared` always in the heap")]
+pub unsafe fn release_into_vec(shared: Box<Shared>, len: usize) -> Option<Vec<u8>> {
     use std::sync::atomic::Ordering;
 
     // follow the drop procedure from `Arc`
     if shared.ref_count.fetch_sub(1, Ordering::Release) != 1 {
         // do not deallocate the heap
         let _shared = Box::into_raw(shared);
-        return;
+        return None;
     }
 
     // This fence is needed to prevent reordering of use of the data and
@@ -184,34 +196,7 @@ pub fn release(shared: Box<Shared>) {
     // > "acquire" operation before deleting the object.
     //
     // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
+    std::sync::atomic::fence(Ordering::Acquire);
 
-    // ThreadSanitizer does not support memory fences.
-    shared.ref_count.load(Ordering::Acquire);
-
-    unsafe {
-        drop(Vec::from_raw_parts(shared.ptr.as_ptr(), 0, shared.cap));
-    }
-}
-
-/// Release the `Shared` handle, if the reference is unique, returns the underlying buffer with
-/// given length of initialized data.
-///
-/// # Safety
-///
-/// Caller must ensure that `len` of data is initialized.
-#[allow(clippy::boxed_local, reason = "`Shared` always in the heap")]
-pub unsafe fn release_into_vec(shared: Box<Shared>, len: usize) -> Option<Vec<u8>> {
-    use std::sync::atomic::Ordering;
-
-    if shared.ref_count.fetch_sub(1, Ordering::Release) != 1 {
-        // do not deallocate the heap
-        let _shared = Box::into_raw(shared);
-        return None;
-    }
-
-    shared.ref_count.load(Ordering::Acquire);
-
-    unsafe {
-        Some(Vec::from_raw_parts(shared.ptr.as_ptr(), len, shared.cap))
-    }
+    unsafe { Some(Vec::from_raw_parts(shared.ptr.as_ptr(), len, shared.cap)) }
 }
