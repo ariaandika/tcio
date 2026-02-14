@@ -1,5 +1,5 @@
 use std::cmp;
-use std::mem::MaybeUninit;
+use std::mem::{self, MaybeUninit};
 use std::ptr::{self, NonNull};
 use std::slice;
 
@@ -101,19 +101,7 @@ impl Drop for BytesMut {
     }
 }
 
-impl Default for BytesMut {
-    #[inline]
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Clone for BytesMut {
-    #[inline]
-    fn clone(&self) -> Self {
-        Self::copy_from_slice(self.as_slice())
-    }
-}
+// ===== Constructor =====
 
 impl BytesMut {
     /// Create new empty [`BytesMut`].
@@ -125,7 +113,7 @@ impl BytesMut {
             ptr: NonNull::dangling(),
             len: 0,
             cap: 0,
-            data: shared::new_unpromoted(),
+            data: shared::NEW_UNPROMOTED,
         }
     }
 
@@ -141,7 +129,7 @@ impl BytesMut {
             ptr: shared::allocate(capacity),
             len: 0,
             cap: capacity,
-            data: shared::new_unpromoted(),
+            data: shared::NEW_UNPROMOTED,
         }
     }
 
@@ -155,20 +143,35 @@ impl BytesMut {
             ptr: shared::allocate_copy(slice),
             len: slice.len(),
             cap: slice.len(),
-            data: shared::new_unpromoted(),
+            data: shared::NEW_UNPROMOTED,
         }
     }
 
     pub(crate) fn from_vec(vec: Vec<u8>) -> Self {
         let (ptr, len, cap) = vec.into_raw_parts();
-        Self {
-            ptr: NonNull::new(ptr).expect("vec cannot be null"),
-            len,
-            cap,
-            data: shared::new_unpromoted(),
-        }
+        let ptr = NonNull::new(ptr).expect("vec cannot be null");
+        let data = shared::NEW_UNPROMOTED;
+        Self { ptr, len, cap, data, }
     }
+}
 
+impl Default for BytesMut {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clone for BytesMut {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self::copy_from_slice(self.as_slice())
+    }
+}
+
+// ===== Getters =====
+
+impl BytesMut {
     /// Returns the number of bytes in the `BytesMut`.
     #[inline]
     pub const fn len(&self) -> usize {
@@ -213,18 +216,6 @@ impl BytesMut {
         self.ptr.as_ptr()
     }
 
-    /// Forces the length of the `BytesMut` to `new_len`.
-    ///
-    /// # Safety
-    ///
-    /// * `new_len` must be less than or equal to [`BytesMut::capacity()`].
-    /// * The elements at `old_len..new_len` must be initialized.
-    #[inline]
-    pub const unsafe fn set_len(&mut self, new_len: usize) {
-        debug_assert!(new_len <= self.cap, "BytesMut::set_len out of bounds");
-        self.len = new_len;
-    }
-
     /// Returns the remaining spare capacity of the `BytesMut` as a slice of `MaybeUninit<T>`.
     #[inline]
     pub const fn spare_capacity_mut(&mut self) -> &mut [MaybeUninit<u8>] {
@@ -232,7 +223,6 @@ impl BytesMut {
             slice::from_raw_parts_mut(self.ptr.as_ptr().add(self.len).cast(), self.cap - self.len)
         }
     }
-
 
     // private
 
@@ -249,7 +239,7 @@ impl BytesMut {
     /// Reserves capacity for at least `additional` more bytes to be inserted.
     #[inline]
     pub fn reserve(&mut self, additional: usize) {
-        assert!(self.cap.checked_add(additional).is_some());
+        assert!(self.cap.overflowing_add(additional).1);
         if additional == 0 {
             return;
         }
@@ -472,12 +462,11 @@ impl BytesMut {
         if at > self.len {
             return None;
         }
-        let mut clone = self.shallow_clone();
-        // SAFETY: `at <= self.len <= self.cap`
-        unsafe { self.advance_unchecked(at) };
-        clone.cap = at;
-        clone.len = at;
-        Some(clone)
+        let clone = self.shallow_clone(at);
+        self.ptr = unsafe { self.ptr.add(at) };
+        self.len = at;
+        self.cap = at;
+        Some(mem::replace(self, clone))
     }
 
     /// Splits `BytesMut` into two at the given index.
@@ -536,14 +525,10 @@ impl BytesMut {
         if at > self.cap {
             return None;
         }
-        let mut other = self.shallow_clone();
-        unsafe {
-            // `at <= self.cap`
-            other.advance_unchecked(at);
-        }
+        let clone = self.shallow_clone(at);
         self.cap = at;
-        self.len = cmp::min(self.len, at); // could advance pass `self.len`
-        Some(other)
+        self.len = cmp::min(self.len, at); // could split pass `self.len`
+        Some(clone)
     }
 
     /// # Safety
@@ -562,34 +547,42 @@ impl BytesMut {
         if let Ok(offset) = shared::as_unpromoted_non_null(self.data) {
             // SAFETY: `self.data` is unpromoted
             self.data = unsafe { shared::mask_payload(self.data.as_ptr(), offset + count) };
-
-            debug_assert!(offset + count < isize::MAX as usize);
         }
 
-        unsafe {
-            self.ptr = self.ptr.add(count); // fn precondition
-            self.len = self.len.saturating_sub(count); // could advance pass `self.len`
-            self.cap = self.cap.unchecked_sub(count); // fn precondition
-        }
+        self.ptr = unsafe { self.ptr.add(count) };
+        self.len -= count;
+        self.cap -= count;
     }
 
-    fn shallow_clone(&mut self) -> Self {
+    fn shallow_clone(&mut self, at: usize) -> Self {
         match shared::as_unpromoted_non_null(self.data) {
-            Ok(offset) => {
-                self.data = shared::promote_with(self.ptr, self.cap, offset, 2);
-            }
-            Err(shared) => {
-                shared::increment(shared);
-            }
+            Ok(offset) => self.data = shared::promote_with(self.ptr, self.cap, offset, 2),
+            Err(shared) => shared::increment(shared),
         }
-
-        unsafe { ptr::read(self) }
+        Self {
+            ptr: unsafe { self.ptr.add(at) },
+            len: self.len - at,
+            cap: self.cap - at,
+            data: self.data,
+        }
     }
 }
 
 // ===== Write =====
 
 impl BytesMut {
+    /// Forces the length of the `BytesMut` to `new_len`.
+    ///
+    /// # Safety
+    ///
+    /// * `new_len` must be less than or equal to [`BytesMut::capacity()`].
+    /// * The elements at `old_len..new_len` must be initialized.
+    #[inline]
+    pub const unsafe fn set_len(&mut self, new_len: usize) {
+        debug_assert!(new_len <= self.cap, "BytesMut::set_len out of bounds");
+        self.len = new_len;
+    }
+
     /// Copy and append bytes to the `BytesMut`.
     ///
     /// # Examples
@@ -717,10 +710,9 @@ impl AsMut<[u8]> for BytesMut {
 
 crate::macros::from! {
     impl BytesMut;
-    fn from(value: &[u8]) { BytesMut::from_vec(value.to_vec()) }
-    fn from(value: &str) { BytesMut::from_vec(value.as_bytes().to_vec()) }
     fn from(value: Vec<u8>) { BytesMut::from_vec(value) }
     fn from(value: Bytes) { value.into_mut() }
+    fn from(value: String) { BytesMut::from(value.into_bytes()) }
 }
 
 impl Eq for BytesMut {}
