@@ -13,9 +13,9 @@ pub struct Bytes {
     /// it is requires to be atomic,
     /// buffer promotion requires to update the ptr
     ///
-    /// 1. 0x__1, (data as usize >> 1), offset from starting ptr
-    /// 2. null, static value
-    /// 3. 0x_00, *mut Shared
+    /// 1. null, static value
+    /// 2. 0x__1, `data as usize >> 1` = offset from base ptr
+    /// 3. 0x_00, NonNull<Shared>
     data: AtomicPtr<Shared>,
 }
 
@@ -23,14 +23,12 @@ unsafe impl Send for Bytes {}
 unsafe impl Sync for Bytes {}
 
 impl Drop for Bytes {
+    #[inline]
     fn drop(&mut self) {
-        if self.len == 0 {
-            return;
-        }
-        let shared = *self.data.get_mut();
-        let Some(shared) = NonNull::new(shared) else {
+        let Some(shared) = NonNull::new(*self.data.get_mut()) else {
             return;
         };
+        debug_assert_ne!(self.len, 0);
         match shared::as_unpromoted(shared.as_ptr()) {
             Some(offset) => shared::deallocate(self.ptr, self.len, offset),
             None => shared::release(shared),
@@ -74,7 +72,7 @@ impl Bytes {
         Self {
             ptr: shared::allocate_copy(slice),
             len: slice.len(),
-            data: AtomicPtr::new(shared::new_unpromoted().as_ptr()),
+            data: AtomicPtr::new(shared::NEW_UNPROMOTED.as_ptr()),
         }
     }
 
@@ -108,7 +106,7 @@ impl From<Vec<u8>> for Bytes {
             Self::new_empty_with_ptr(ptr)
         } else if cap == len {
             // this is the ideal form, `len` and `cap` can be stored in single field
-            let data = AtomicPtr::new(shared::new_unpromoted().as_ptr());
+            let data = AtomicPtr::new(shared::NEW_UNPROMOTED.as_ptr());
             Self { ptr, len, data }
         } else {
             // we cannot start in unpromoted for `Shared` storage
@@ -129,15 +127,14 @@ impl From<Vec<u8>> for Bytes {
 impl From<Box<[u8]>> for Bytes {
     #[inline]
     fn from(value: Box<[u8]>) -> Self {
-        if value.is_empty() {
-            return Self::new_empty_with_ptr(
-                NonNull::new(Box::into_raw(value).cast()).expect("box cannot be null"),
-            );
-        }
-        Self {
-            len: value.len(),
-            ptr: NonNull::new(Box::into_raw(value).cast()).expect("box cannot be null"),
-            data: AtomicPtr::new(shared::new_unpromoted().as_ptr()),
+        let len = value.len();
+        let ptr = NonNull::new(Box::into_raw(value).cast()).expect("box cannot be null");
+
+        if len == 0 {
+            Self::new_empty_with_ptr(ptr)
+        } else {
+            let data = AtomicPtr::new(shared::NEW_UNPROMOTED.as_ptr());
+            Self { ptr, len, data }
         }
     }
 }
@@ -345,7 +342,7 @@ impl Bytes {
         // which cannot be represented in unpromoted,
         // thus required to be promoted
         let data = *self.data.get_mut();
-        if !data.is_null() && let Some(offset) = shared::as_unpromoted(data) {
+        if let Some(offset) = shared::as_unpromoted(data) {
             *self.data.get_mut() = shared::promote_with(self.ptr, self.len, offset, 1).as_ptr();
         }
         self.len = len;
@@ -403,7 +400,6 @@ impl Bytes {
         debug_assert!(count <= self.len, "safety violated, out of bounds");
 
         let data = *self.data.get_mut();
-
         if let Some(offset) = shared::as_unpromoted(data) {
             // SAFETY: `data` is unpromoted
             *self.data.get_mut() = unsafe { shared::mask_payload(data, offset + count).as_ptr() };
@@ -479,6 +475,10 @@ impl Bytes {
             // SAFETY: `self.ptr.add(self.len)` is always valid
             return Some(Bytes::new_empty_with_ptr(unsafe { self.ptr.add(self.len) }));
         }
+        self.split_off_inner(at)
+    }
+
+    fn split_off_inner(&mut self, at: usize) -> Option<Bytes> {
         let remain_len = self.len.checked_sub(at)?;
         let cloned = self.clone_mut(unsafe { self.ptr.add(at) }, remain_len);
         self.len = at;
@@ -545,10 +545,10 @@ impl Bytes {
             let empty = Bytes::new_empty_with_ptr(unsafe { self.ptr.add(self.len) });
             return Some(mem::replace(self, empty));
         }
-        let remain_len = self.len.checked_sub(at)?;
-        let cloned = self.clone_mut(unsafe { self.ptr.add(at) }, remain_len);
-        self.len = at;
-        Some(mem::replace(self, cloned))
+        match self.split_off_inner(at) {
+            Some(ok) => Some(mem::replace(self, ok)),
+            None => None,
+        }
     }
 }
 
@@ -557,27 +557,18 @@ impl Bytes {
 impl Clone for Bytes {
     #[inline]
     fn clone(&self) -> Self {
-        let shared = self.data.load(Ordering::Relaxed);
-
-        let Some(shared) = NonNull::new(shared) else {
+        let Some(shared) = NonNull::new(self.data.load(Ordering::Relaxed)) else {
             return Self {
                 ptr: self.ptr,
                 len: self.len,
                 data: AtomicPtr::new(std::ptr::null_mut()),
             };
         };
-
         match shared::as_unpromoted_non_null(shared) {
-            Ok(offset) => {
-                promote_ref(self, offset, shared)
-            }
+            Ok(offset) => promote_ref(self, offset, shared),
             Err(shared_ref) => {
                 shared::increment(shared_ref);
-                Self {
-                    ptr: self.ptr,
-                    len: self.len,
-                    data: AtomicPtr::new(shared.as_ptr()),
-                }
+                unsafe { ptr::read(self) }
             }
         }
     }
@@ -589,12 +580,9 @@ impl Bytes {
     /// `Bytes` constructed from [`Bytes::from_static`] will always returns `false`.
     #[inline]
     pub fn is_unique(&self) -> bool {
-        let shared = self.data.load(Ordering::Relaxed);
-
-        let Some(shared) = NonNull::new(shared) else {
+        let Some(shared) = NonNull::new(self.data.load(Ordering::Relaxed)) else {
             return false;
         };
-
         match shared::as_unpromoted_non_null(shared) {
             Ok(_) => true,
             Err(shared) => shared::is_unique(shared),
@@ -636,9 +624,8 @@ impl From<Bytes> for Vec<u8> {
     /// Otherwise, the buffer is copied to new allocation.
     fn from(value: Bytes) -> Self {
         let mut me = ManuallyDrop::new(value);
-        let shared = *me.data.get_mut();
 
-        let Some(shared) = NonNull::new(shared) else {
+        let Some(shared) = NonNull::new(*me.data.get_mut()) else {
             return me.as_slice().to_vec();
         };
 
@@ -675,9 +662,8 @@ impl Bytes {
     /// Otherwise, the buffer is copied to new allocation.
     pub fn into_mut(self) -> BytesMut {
         let mut me = ManuallyDrop::new(self);
-        let shared = *me.data.get_mut();
 
-        let Some(shared) = NonNull::new(shared) else {
+        let Some(shared) = NonNull::new(*me.data.get_mut()) else {
             return BytesMut::from_vec(me.as_slice().to_vec());
         };
 
@@ -805,6 +791,12 @@ crate::macros::partial_eq! {
     fn eq(self, other: Vec<u8>) { <[u8]>::eq(self, other.as_slice()) }
     fn eq(self, other: Self) { <[u8]>::eq(self, other.as_slice()) }
     fn eq(self, other: BytesMut) { <[u8]>::eq(self, other.as_slice()) }
+}
+
+impl<const N: usize> PartialEq<[u8; N]> for Bytes {
+    fn eq(&self, other: &[u8; N]) -> bool {
+        self.as_slice() == other
+    }
 }
 
 impl std::io::Read for Bytes {
