@@ -17,12 +17,12 @@ macro_rules! vec_excess {
 
 macro_rules! into_vec {
     ($buf:expr, eq! = $ptr:expr, $slice:expr) => {
-        let vec = $buf.into_vec();
+        let vec = Vec::from($buf);
         assert_eq!(vec.as_ptr(), $ptr);
         assert_eq!(vec.as_slice(), $slice);
     };
     ($buf:expr, ne! = $ptr:expr, $slice:expr) => {
-        let vec = $buf.into_vec();
+        let vec = Vec::from($buf);
         assert_ne!(vec.as_ptr(), $ptr);
         assert_eq!(vec.as_slice(), $slice);
     };
@@ -52,7 +52,7 @@ fn test_bytes_static_empty() {
     assert!(!cloned.is_unique());
     assert_eq!(cloned.as_slice(), &[]);
 
-    let vec = cloned.into_vec();
+    let vec = Vec::from(cloned);
     assert_eq!(vec.capacity(), 0);
 }
 
@@ -602,7 +602,7 @@ fn test_bytes_from_mut() {
     drop(cloned);
 
     assert!(buf.is_unique());
-    let vec = buf.into_vec();
+    let vec = Vec::from(buf);
     assert_eq!(vec.as_ptr(), ptr);
 }
 

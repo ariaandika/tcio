@@ -94,9 +94,9 @@ unsafe impl Sync for BytesMut { }
 impl Drop for BytesMut {
     #[inline]
     fn drop(&mut self) {
-        match shared::into_unpromoted(self.data) {
-            Ok(offset) => drop(shared::build_vec(self.ptr, self.cap, offset)),
-            Err(shared) => shared::release(shared),
+        match shared::as_unpromoted(self.data.as_ptr()) {
+            Some(offset) => shared::deallocate(self.ptr, self.cap, offset),
+            None => shared::release(self.data),
         }
     }
 }
@@ -134,13 +134,29 @@ impl BytesMut {
     /// If `capacity` is zero, this method will not allocate.
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
-        Self::from_vec(Vec::with_capacity(capacity))
+        if capacity == 0 {
+            return Self::new();
+        }
+        Self {
+            ptr: shared::allocate(capacity),
+            len: 0,
+            cap: capacity,
+            data: shared::new_unpromoted(),
+        }
     }
 
     /// Create new [`BytesMut`] by copying given bytes.
     #[inline]
     pub fn copy_from_slice(slice: &[u8]) -> Self {
-        Self::from_vec(slice.to_vec())
+        if slice.is_empty() {
+            return Self::new();
+        }
+        Self {
+            ptr: shared::allocate_copy(slice),
+            len: slice.len(),
+            cap: slice.len(),
+            data: shared::new_unpromoted(),
+        }
     }
 
     pub(crate) fn from_vec(vec: Vec<u8>) -> Self {
@@ -229,158 +245,99 @@ impl BytesMut {
 
 // ===== Allocation =====
 
-fn is_overflow(cap: usize, additional: usize) -> bool {
-    cap
-        .checked_add(additional)
-        .filter(|&e| e <= isize::MAX as usize)
-        .is_none()
-}
-
 impl BytesMut {
     /// Reserves capacity for at least `additional` more bytes to be inserted.
     #[inline]
     pub fn reserve(&mut self, additional: usize) {
-        assert!(!is_overflow(self.cap, additional));
+        assert!(self.cap.checked_add(additional).is_some());
         if additional == 0 {
             return;
         }
         if self.cap - self.len >= additional {
             return;
         }
-        let _ = self.reserve_inner(additional, true);
+        self.reserve_inner(additional);
     }
 
     /// Try to reclaim additional capacity without allocating.
+    ///
+    /// Returns `true` if reclaiming success without allocating.
     #[inline]
-    pub fn try_reclaim(&mut self, additional: usize) -> bool {
+    pub fn try_reclaim(&mut self, additional: usize) {
         if additional == 0 {
-            return true;
+            return;
         }
         if self.cap - self.len >= additional {
-            return true;
+            return;
         }
-        if is_overflow(self.cap, additional) {
-            return false;
+        if self.cap.checked_add(additional).is_none() {
+            return;
         }
-        self.reserve_inner(additional, false)
+        self.reserve_inner(additional);
     }
 
-    /// Try to gain capacity without allocation
-    ///
-    /// The explanation is at the top of this file
-    fn reserve_inner(&mut self, additional: usize, allocate: bool) -> bool {
-        let ptr = self.ptr.as_ptr();
-        let len = self.len;
-
-        match shared::as_unpromoted_mut(&mut self.data) {
-            Ok(offset) => {
-                let remaining = offset + (self.cap - self.len);
-
-                // Case 1, copy the data backwards
-                if remaining >= additional && offset >= len {
-                    unsafe {
-                        let buf_ptr = ptr.sub(offset);
-
-                        // `offset >= len` guarantee no overlap
-                        ptr::copy_nonoverlapping(ptr, buf_ptr, len);
-
-                        self.ptr = NonNull::new_unchecked(buf_ptr);
-                        self.cap += offset;
-
-                        // reset the `offset`
-                        self.data = shared::mask_payload(self.data.as_ptr(), 0);
-
-                        return true;
-                    }
-                }
-
-                if !allocate {
-                    return false;
-                }
-
-                unsafe {
-                    // follow `Vec::reserve` logic instead of `Vec::with_capacity`,
-                    // `max(exponential, additional)`
-                    let capacity = cmp::max(self.cap * 2, len + additional);
-
-                    let (new_ptr, _, new_cap) = Vec::with_capacity(capacity).into_raw_parts();
-
-                    ptr::copy_nonoverlapping(ptr, new_ptr, len);
-
-                    // drop the original buffer *after* copy
-                    drop(shared::build_vec(self.ptr, self.cap, offset));
-
-
-                    self.ptr = NonNull::new_unchecked(new_ptr);
-                    self.cap = new_cap;
-                    // reset the `offset`
-                    self.data = shared::mask_payload(self.data.as_ptr(), 0);
-                }
-
-                true
-            },
+    fn reserve_inner(&mut self, additional: usize) {
+        let (base_raw, offset) = match shared::as_unpromoted_non_null(self.data) {
+            Ok(offset) => (
+                Some((unsafe { self.ptr.sub(offset) }, self.cap + offset)),
+                offset,
+            ),
             Err(shared) => {
                 if shared::is_unique(shared) {
-                    let shared_ptr = shared.as_ptr();
-                    // SAFETY: `ptr` is originated from `shared_ptr`, and the only `ptr` operation
-                    // is addition through `.advance_unchecked()`
-                    let offset = unsafe { ptr.offset_from_unsigned(shared_ptr) };
-
+                    let base_raw = (shared.as_non_null(), shared.capacity());
+                    let offset = unsafe { self.ptr.offset_from_unsigned(base_raw.0) };
                     // reclaim the leftover tail capacity
-                    {
-                        let shared_cap = shared.capacity();
-                        let remaining_tail = shared_cap - (self.cap + offset);
-                        self.cap += remaining_tail;
-
-                        // Case 2
-                        if remaining_tail >= additional {
-                            return true;
-                        }
-                    }
-
-                    let remaining = offset + (self.cap - self.len);
-
-                    // Case 1, copy the data backwards
-                    if remaining >= additional && offset >= len {
-                        unsafe {
-                            // `offset >= len` guarantee no overlap
-                            ptr::copy_nonoverlapping(ptr, shared_ptr, len);
-
-                            // reset the `offset`
-                            self.ptr = NonNull::new_unchecked(shared_ptr);
-                            self.cap += offset;
-
-                            return true;
-                        }
-                    }
-
-                    // give up reclaiming, try to reallocate
+                    self.cap = base_raw.1 - offset;
+                    (Some(base_raw), offset)
+                } else {
+                    (None, unsafe {
+                        self.ptr.offset_from_unsigned(shared.as_non_null())
+                    })
                 }
+            }
+        };
 
-                if !allocate {
-                    return false;
-                }
+        // copy the data backwards, only if its nonoverlapping and the buffer is exclusively owned
+        let offset = if let Some((base_ptr, base_cap)) = base_raw
+            && offset >= self.len
+        {
+            unsafe { ptr::copy_nonoverlapping(self.ptr.as_ptr(), base_ptr.as_ptr(), self.len) };
+            self.ptr = base_ptr;
+            self.cap = base_cap;
+            if shared::is_unpromoted(self.data.as_ptr()) {
+                self.data = shared::NEW_UNPROMOTED;
+            }
+            0
+        } else {
+            offset
+        };
 
-                // reallocate
+        if self.cap - self.len >= additional {
+            // enough capacity without reallocating
+            return;
+        }
 
-                unsafe {
-                    // follow `Vec::reserve` logic instead of `Vec::with_capacity`
-                    let capacity = cmp::max(self.cap * 2, len + additional);
-
-                    let (new_ptr, _, new_cap) = Vec::with_capacity(capacity).into_raw_parts();
-
-                    ptr::copy_nonoverlapping(ptr, new_ptr, len);
-
-                    // release the shared buffer *after* copy
-                    // let old_shared = ptr::read(shared);
-                    shared::release(Box::from_raw(shared));
-
-                    self.ptr = NonNull::new_unchecked(new_ptr);
-                    self.cap = new_cap;
-                    self.data = shared::new_unpromoted();
-
-                    true
-                }
+        // allocation
+        match base_raw {
+            Some((base_ptr, base_cap)) => {
+                let new_cap = cmp::max(base_cap * 2, self.len + offset + additional);
+                let new_ptr = if shared::is_unpromoted(self.data.as_ptr()) {
+                    shared::grow(base_ptr, base_cap, new_cap)
+                } else {
+                    unsafe { self.data.as_mut().grow(new_cap) }
+                };
+                self.ptr = unsafe { new_ptr.add(offset) };
+                self.cap = new_cap - offset;
+            }
+            None => {
+                // the buffer is not exclusive, `shared::grow` cannot be used, new allocation is
+                // required
+                let base_cap = self.cap + offset;
+                let new_cap = cmp::max(base_cap * 2, self.len + offset + additional);
+                let new_base_ptr = shared::allocate(new_cap);
+                shared::release(self.data);
+                self.ptr = unsafe { new_base_ptr.add(offset) };
+                self.cap = new_cap - offset;
             }
         }
     }
@@ -705,9 +662,9 @@ impl BytesMut {
             return Ok(());
         }
 
-        let ptr = unsafe { self.ptr.as_ptr().add(self.len) };
+        let ptr = unsafe { self.ptr.add(self.len) };
 
-        if ptr == other.ptr.as_ptr()
+        if ptr == other.ptr
             && shared::is_promoted(self.data.as_ptr())
             && shared::is_promoted(other.data.as_ptr())
         {

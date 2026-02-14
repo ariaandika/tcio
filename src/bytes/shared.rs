@@ -1,5 +1,9 @@
-use std::ptr::{self, NonNull};
-use std::sync::atomic::AtomicUsize;
+use core::ptr::{self, NonNull};
+use core::sync::atomic::AtomicUsize;
+use core::alloc::Layout;
+use base_alloc::alloc;
+
+extern crate alloc as base_alloc;
 
 /// even number alignment means the LSB is always unset
 ///
@@ -27,32 +31,74 @@ impl Shared {
         self.cap
     }
 
-    pub const fn as_ptr(&self) -> *mut u8 {
-        self.ptr.as_ptr()
+    pub const fn as_non_null(&self) -> NonNull<u8> {
+        self.ptr
     }
 
-    pub const fn as_non_null(&self) -> NonNull<u8> {
+    pub fn grow(&mut self, new_cap: usize) -> NonNull<u8> {
+        self.ptr = self::grow(self.ptr, self.cap, new_cap);
+        self.cap = new_cap;
         self.ptr
     }
 }
 
+// ===== Allocation =====
+
+pub fn allocate(cap: usize) -> NonNull<u8> {
+    unsafe {
+        let layout = Layout::from_size_align_unchecked(cap, 1);
+        match NonNull::new(alloc::alloc(layout)) {
+            Some(ok) => ok,
+            None => alloc::handle_alloc_error(layout)
+        }
+    }
+}
+
+pub fn allocate_copy(slice: &[u8]) -> NonNull<u8> {
+    unsafe {
+        let mem = allocate(slice.len());
+        ptr::copy_nonoverlapping(slice.as_ptr(), mem.as_ptr(), slice.len());
+        mem
+    }
+}
+
+pub fn grow(ptr: NonNull<u8>, old_cap: usize, new_cap: usize) -> NonNull<u8> {
+    unsafe {
+        let layout = Layout::from_size_align_unchecked(old_cap, 1);
+        match NonNull::new(alloc::realloc(ptr.as_ptr(), layout, new_cap)) {
+            Some(ok) => ok,
+            None => alloc::handle_alloc_error(layout)
+        }
+    }
+}
+
+pub fn deallocate(ptr: NonNull<u8>, cap: usize, offset: usize) {
+    unsafe {
+        let layout = Layout::from_size_align_unchecked(cap + offset, 1);
+        alloc::dealloc(ptr.as_ptr().sub(offset), layout);
+    }
+}
+
 // ===== Arbitrary =====
+
+pub const NEW_UNPROMOTED: NonNull<Shared> =
+    NonNull::new(ptr::null_mut::<u8>().wrapping_add(DATA_UNPROMOTED).cast()).expect("ptr is 1");
 
 pub const fn new_unpromoted() -> NonNull<Shared> {
     NonNull::new(ptr::null_mut::<u8>().wrapping_add(DATA_UNPROMOTED).cast()).expect("ptr is 1")
 }
 
 pub fn is_unpromoted(data: *const Shared) -> bool {
-    data as usize & DATA_MASK == DATA_UNPROMOTED
+    data.addr() & DATA_MASK == DATA_UNPROMOTED
 }
 
 pub fn is_promoted(data: *const Shared) -> bool {
-    data as usize & DATA_MASK == DATA_PROMOTED
+    data.addr() & DATA_MASK == DATA_PROMOTED
 }
 
 pub fn as_unpromoted_non_null<'a>(data: NonNull<Shared>) -> Result<usize, &'a Shared> {
     if is_unpromoted(data.as_ptr()) {
-        Ok(data.as_ptr() as usize >> RESERVED_BIT_DATA)
+        Ok(data.as_ptr().addr() >> RESERVED_BIT_DATA)
     } else {
         Err(unsafe { data.as_ref() })
     }
@@ -60,23 +106,15 @@ pub fn as_unpromoted_non_null<'a>(data: NonNull<Shared>) -> Result<usize, &'a Sh
 
 pub fn as_unpromoted(data: *const Shared) -> Option<usize> {
     if is_unpromoted(data) {
-        Some(data as usize >> RESERVED_BIT_DATA)
+        Some(data.addr() >> RESERVED_BIT_DATA)
     } else {
         None
     }
 }
 
-pub fn as_unpromoted_mut<'a>(data: &mut NonNull<Shared>) -> Result<usize, &'a mut Shared> {
-    if is_unpromoted(data.as_ptr()) {
-        Ok(data.as_ptr() as usize >> RESERVED_BIT_DATA)
-    } else {
-        Err(unsafe { data.as_mut() })
-    }
-}
-
 pub fn into_unpromoted(data: NonNull<Shared>) -> Result<usize, Box<Shared>> {
     if is_unpromoted(data.as_ptr()) {
-        Ok(data.as_ptr() as usize >> RESERVED_BIT_DATA)
+        Ok(data.as_ptr().addr() >> RESERVED_BIT_DATA)
     } else {
         Err(unsafe { Box::from_raw(data.as_ptr()) })
     }
@@ -158,9 +196,46 @@ pub fn increment(shared: &Shared) {
 }
 
 #[allow(clippy::boxed_local, reason = "`Shared` always in the heap")]
-pub fn release(shared: Box<Shared>) {
+pub fn release(shared: NonNull<Shared>) {
+    debug_assert!(self::is_promoted(shared.as_ptr()));
     // SAFETY: `release_into_vec` with `0` will always safe
-    unsafe { self::release_into_vec(shared, 0) };
+    if let Some((ptr, cap)) = self::release_into_raw(shared) {
+        deallocate(ptr, cap, 0);
+    }
+}
+
+#[allow(clippy::boxed_local, reason = "`Shared` always in the heap")]
+pub fn release_into_raw(shared: NonNull<Shared>) -> Option<(NonNull<u8>, usize)> {
+    use std::sync::atomic::Ordering;
+    debug_assert!(self::is_promoted(shared.as_ptr()));
+
+    // follow the drop procedure from `Arc`
+    if unsafe { shared.as_ref() }.ref_count.fetch_sub(1, Ordering::Release) != 1 {
+        return None;
+    }
+
+    // This fence is needed to prevent reordering of use of the data and
+    // deletion of the data.  Because it is marked `Release`, the decreasing
+    // of the reference count synchronizes with this `Acquire` fence. This
+    // means that use of the data happens before decreasing the reference
+    // count, which happens before this fence, which happens before the
+    // deletion of the data.
+    //
+    // As explained in the [Boost documentation][1],
+    //
+    // > It is important to enforce any possible access to the object in one
+    // > thread (through an existing reference) to *happen before* deleting
+    // > the object in a different thread. This is achieved by a "release"
+    // > operation after dropping a reference (any access to the object
+    // > through this reference must obviously happened before), and an
+    // > "acquire" operation before deleting the object.
+    //
+    // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
+    std::sync::atomic::fence(Ordering::Acquire);
+
+    // `Shared` is unique, thus gaining exclusive ownership
+    let shared = unsafe { Box::from_raw(shared.as_ptr()) };
+    Some((shared.ptr, shared.cap))
 }
 
 /// Release the `Shared` handle, if the reference is unique, returns the underlying buffer with

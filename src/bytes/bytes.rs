@@ -24,21 +24,17 @@ unsafe impl Sync for Bytes {}
 
 impl Drop for Bytes {
     fn drop(&mut self) {
+        if self.len == 0 {
+            return;
+        }
         let shared = *self.data.get_mut();
         let Some(shared) = NonNull::new(shared) else {
             return;
         };
-        match shared::into_unpromoted(shared) {
-            Ok(offset) => drop(shared::build_vec(self.ptr, self.len, offset)),
-            Err(shared) => shared::release(shared),
+        match shared::as_unpromoted(shared.as_ptr()) {
+            Some(offset) => shared::deallocate(self.ptr, self.len, offset),
+            None => shared::release(shared),
         }
-    }
-}
-
-impl Default for Bytes {
-    #[inline]
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -51,7 +47,7 @@ impl Bytes {
         Self {
             ptr: NonNull::dangling(),
             len: 0,
-            data: AtomicPtr::new(std::ptr::null_mut()),
+            data: AtomicPtr::new(ptr::null_mut()),
         }
     }
 
@@ -63,20 +59,23 @@ impl Bytes {
         Self {
             ptr: NonNull::new(bytes.as_ptr().cast_mut()).expect("reference cannot be null"),
             len: bytes.len(),
-            data: AtomicPtr::new(std::ptr::null_mut()),
+            data: AtomicPtr::new(ptr::null_mut()),
         }
     }
 
     /// Create new [`Bytes`] by copying given bytes.
     #[inline]
-    pub fn copy_from_slice(data: &[u8]) -> Self {
-        if data.is_empty() {
-            return Self::new();
+    pub fn copy_from_slice(slice: &[u8]) -> Self {
+        if slice.is_empty() {
+            return Self::new_empty_with_ptr(
+                NonNull::new(slice.as_ptr().cast_mut()).expect("reference cannot be null"),
+            );
         }
-        let (ptr, len, _) = data.to_vec().into_raw_parts();
-        let ptr = NonNull::new(ptr).expect("vec cannot be null");
-        let data = AtomicPtr::new(shared::new_unpromoted().as_ptr());
-        Self { ptr, len, data }
+        Self {
+            ptr: shared::allocate_copy(slice),
+            len: slice.len(),
+            data: AtomicPtr::new(shared::new_unpromoted().as_ptr()),
+        }
     }
 
     /// Specialized empty `Bytes` with given pointer.
@@ -92,13 +91,22 @@ impl Bytes {
     }
 }
 
+impl Default for Bytes {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl From<Vec<u8>> for Bytes {
     #[inline]
     fn from(vec: Vec<u8>) -> Self {
         let (ptr, len, cap) = vec.into_raw_parts();
         let ptr = NonNull::new(ptr).expect("vec cannot be null");
 
-        if cap == len {
+        if len == 0 {
+            Self::new_empty_with_ptr(ptr)
+        } else if cap == len {
             // this is the ideal form, `len` and `cap` can be stored in single field
             let data = AtomicPtr::new(shared::new_unpromoted().as_ptr());
             Self { ptr, len, data }
@@ -121,6 +129,11 @@ impl From<Vec<u8>> for Bytes {
 impl From<Box<[u8]>> for Bytes {
     #[inline]
     fn from(value: Box<[u8]>) -> Self {
+        if value.is_empty() {
+            return Self::new_empty_with_ptr(
+                NonNull::new(Box::into_raw(value).cast()).expect("box cannot be null"),
+            );
+        }
         Self {
             len: value.len(),
             ptr: NonNull::new(Box::into_raw(value).cast()).expect("box cannot be null"),
@@ -382,7 +395,8 @@ impl Bytes {
     }
 
     pub(crate) unsafe fn advance_unchecked(&mut self, count: usize) {
-        if count == 0 {
+        if count == self.len {
+            self.clear();
             return;
         }
 
@@ -458,26 +472,17 @@ impl Bytes {
     /// ```
     #[inline]
     pub fn try_split_off(&mut self, at: usize) -> Option<Self> {
-        let len = self.len;
-
-        if at > len {
-            return None;
-        }
-
-        if at == len {
-            // SAFETY: `self.ptr.add(self.len)` is always valid
-            let ptr = unsafe { self.ptr.add(len) };
-            return Some(Bytes::new_empty_with_ptr(ptr));
-        }
-
         if at == 0 {
             return Some(mem::replace(self, Bytes::new_empty_with_ptr(self.ptr)));
         }
-
-        let mut clone = self.clone_mut();
-        clone.advance(at);
+        if at == self.len {
+            // SAFETY: `self.ptr.add(self.len)` is always valid
+            return Some(Bytes::new_empty_with_ptr(unsafe { self.ptr.add(self.len) }));
+        }
+        let remain_len = self.len.checked_sub(at)?;
+        let cloned = self.clone_mut(unsafe { self.ptr.add(at) }, remain_len);
         self.len = at;
-        Some(clone)
+        Some(cloned)
     }
 
     /// Splits `Bytes` into two at the given index.
@@ -533,26 +538,17 @@ impl Bytes {
     /// ```
     #[inline]
     pub fn try_split_to(&mut self, at: usize) -> Option<Self> {
-        let len = self.len;
-
-        if at > len {
-            return None;
-        }
-
-        if at == len {
-            // SAFETY: `self.ptr.add(self.len)` is valid
-            let ptr = unsafe { self.ptr.add(len) };
-            return Some(mem::replace(self, Bytes::new_empty_with_ptr(ptr)));
-        }
-
         if at == 0 {
             return Some(Bytes::new_empty_with_ptr(self.ptr));
         }
-
-        let mut clone = self.clone_mut();
-        self.advance(at);
-        clone.len = at;
-        Some(clone)
+        if at == self.len {
+            let empty = Bytes::new_empty_with_ptr(unsafe { self.ptr.add(self.len) });
+            return Some(mem::replace(self, empty));
+        }
+        let remain_len = self.len.checked_sub(at)?;
+        let cloned = self.clone_mut(unsafe { self.ptr.add(at) }, remain_len);
+        self.len = at;
+        Some(mem::replace(self, cloned))
     }
 }
 
@@ -573,7 +569,7 @@ impl Clone for Bytes {
 
         match shared::as_unpromoted_non_null(shared) {
             Ok(offset) => {
-                promote_ref(self, offset, shared.as_ptr())
+                promote_ref(self, offset, shared)
             }
             Err(shared_ref) => {
                 shared::increment(shared_ref);
@@ -607,90 +603,71 @@ impl Bytes {
 
     /// Like `clone`, but because it have exclusive `&mut self`, promotion guaranteed to be
     /// exclusive and skip atomic operation.
-    fn clone_mut(&mut self) -> Self {
-        let shared = self.data.load(Ordering::Relaxed);
-
-        let Some(shared) = NonNull::new(shared) else {
-            return Self {
-                ptr: self.ptr,
-                len: self.len,
-                data: AtomicPtr::new(std::ptr::null_mut()),
-            };
+    fn clone_mut(&mut self, ptr: NonNull<u8>, len: usize) -> Self {
+        let Some(shared) = NonNull::new(self.data.load(Ordering::Relaxed)) else {
+            let data = AtomicPtr::new(std::ptr::null_mut());
+            return Self { ptr, len, data };
         };
-
-        let data = match shared::as_unpromoted_non_null(shared) {
+        match shared::as_unpromoted_non_null(shared) {
             Ok(offset) => {
                 let new_shared = shared::promote_with(self.ptr, self.len, offset, 2).as_ptr();
                 // in contrast with `clone`, we have exclusive `&mut self` thus no promotion can
                 // happen concurrently
                 *self.data.get_mut() = new_shared;
-                new_shared
-            },
+                let data = AtomicPtr::new(new_shared);
+                Self { ptr, len, data }
+            }
             Err(shared_ref) => {
                 shared::increment(shared_ref);
-                shared.as_ptr()
-            },
-        };
-
-        Self {
-            ptr: self.ptr,
-            len: self.len,
-            data: AtomicPtr::new(data),
+                let data = AtomicPtr::new(shared.as_ptr());
+                Self { ptr, len, data }
+            }
         }
     }
+}
 
+// ===== Conversion =====
+
+impl From<Bytes> for Vec<u8> {
     /// Converts a [`Bytes`] into a byte vector.
     ///
     /// If [`Bytes::is_unique`] returns `true`, the buffer is consumed and returned.
     ///
     /// Otherwise, the buffer is copied to new allocation.
-    pub fn into_vec(self) -> Vec<u8> {
-        let mut me = ManuallyDrop::new(self);
+    fn from(value: Bytes) -> Self {
+        let mut me = ManuallyDrop::new(value);
         let shared = *me.data.get_mut();
 
         let Some(shared) = NonNull::new(shared) else {
             return me.as_slice().to_vec();
         };
 
-        let (offset, mut vec) = match shared::into_unpromoted(shared) {
-            Ok(offset) => (offset, shared::build_vec(me.ptr, me.len, offset)),
-            Err(shared) => {
-                let base_ptr = shared.as_non_null();
-                let cap = shared.capacity();
-                unsafe {
-                    match shared::release_into_vec(shared, cap) {
-                        Some(vec) => (me.ptr.offset_from_unsigned(base_ptr), vec),
-                        None => {
-                            // skip handling the `advance` below if we can directly copy
-                            // the correct range
-                            return me.as_slice().to_vec();
-                        }
-                    }
-                }
+        let (base_ptr, cap) = match shared::as_unpromoted(shared.as_ptr()) {
+            Some(offset) => unsafe { (me.ptr.sub(offset), me.len + offset) },
+            None => match shared::release_into_raw(shared) {
+                Some((ptr, cap)) => (ptr, cap),
+                None => return me.as_slice().to_vec(),
             }
         };
 
-        if offset != 0 {
+        if me.ptr != base_ptr {
             // `Bytes` has been `advanced`, `Vec` cannot represent that,
             // so we can only copy the buffer backwards
-            let Bytes { ptr, len, .. } = *me;
-            let ptr = ptr.as_ptr();
-            let vec_ptr = vec.as_mut_ptr();
-
             unsafe {
-                if offset >= len {
-                    ptr::copy_nonoverlapping(ptr, vec_ptr, len);
+                let offset = me.ptr.offset_from_unsigned(base_ptr);
+                if offset > me.len {
+                    ptr::copy_nonoverlapping(me.ptr.as_ptr(), base_ptr.as_ptr(), me.len)
                 } else {
-                    ptr::copy(ptr, vec_ptr, len);
+                    ptr::copy(me.ptr.as_ptr(), base_ptr.as_ptr(), me.len)
                 }
             }
         }
-        // we handle advancing to make it equal with `len`,
-        // thus `len` bytes are initialized
-        unsafe { vec.set_len(me.len) };
-        vec
-    }
 
+        unsafe { Vec::from_raw_parts(base_ptr.as_ptr(), me.len, cap) }
+    }
+}
+
+impl Bytes {
     /// Converts a [`Bytes`] into a [`BytesMut`].
     ///
     /// If [`Bytes::is_unique`] returns `true`, the buffer is consumed and returned.
@@ -744,41 +721,39 @@ impl Bytes {
 // implementation
 #[inline(never)]
 #[cold]
-fn promote_ref(me: &Bytes, offset: usize, shared: *mut Shared) -> Bytes {
-    let new_shared = shared::promote_with(me.ptr, me.len, offset, 2).as_ptr();
+fn promote_ref(me: &Bytes, offset: usize, shared: NonNull<Shared>) -> Bytes {
+    let new_shared = shared::promote_with(me.ptr, me.len, offset, 2);
 
     // because cloning is called via the `Clone` trait, which take `&self`, and `Bytes`
     // is `Sync`, cloning could happens concurrently
     match me.data.compare_exchange(
-        shared,
-        new_shared,
+        shared.as_ptr(),
+        new_shared.as_ptr(),
         Ordering::AcqRel,
         Ordering::Acquire,
     ) {
         Ok(old_shared) => {
             // the returned pointer is the old pointer
-            debug_assert!(std::ptr::eq(old_shared, shared));
-            debug_assert!(!std::ptr::eq(old_shared, new_shared));
+            debug_assert!(std::ptr::eq(old_shared, shared.as_ptr()));
+            debug_assert!(!std::ptr::eq(old_shared, new_shared.as_ptr()));
 
             Bytes {
                 ptr: me.ptr,
                 len: me.len,
-                data: AtomicPtr::new(new_shared),
+                data: AtomicPtr::new(new_shared.as_ptr()),
             }
         }
         Err(promoted_shared) => {
             // concurrent promotion happens during heap allocation
-            debug_assert!(!std::ptr::eq(new_shared, promoted_shared));
+            debug_assert!(!std::ptr::eq(new_shared.as_ptr(), promoted_shared));
             // the written pointer should have been promoted
             debug_assert!(shared::is_promoted(promoted_shared));
 
-            unsafe {
-                // release the heap that failed the promotion
-                shared::release(Box::from_raw(new_shared));
+            // release the heap that failed the promotion
+            shared::release(new_shared);
 
-                // increase the shared reference
-                shared::increment(&*promoted_shared);
-            }
+            // increase the shared reference
+            unsafe { shared::increment(&*promoted_shared) };
 
             Bytes {
                 ptr: me.ptr,
@@ -819,13 +794,6 @@ crate::macros::from! {
     fn from(value: &'static str) { Self::from_static(value.as_bytes()) }
     fn from(value: String) { Self::from(value.into_bytes()) }
     fn from(value: BytesMut) { value.freeze() }
-}
-
-impl From<Bytes> for Vec<u8> {
-    #[inline]
-    fn from(value: Bytes) -> Self {
-        value.into_vec()
-    }
 }
 
 impl Eq for Bytes {}
