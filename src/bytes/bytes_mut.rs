@@ -453,7 +453,6 @@ impl BytesMut {
             return None;
         }
         let clone = self.shallow_clone(at);
-        self.ptr = unsafe { self.ptr.add(at) };
         self.len = at;
         self.cap = at;
         Some(mem::replace(self, clone))
