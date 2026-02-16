@@ -84,10 +84,6 @@ pub fn deallocate(ptr: NonNull<u8>, cap: usize, offset: usize) {
 pub const NEW_UNPROMOTED: NonNull<Shared> =
     NonNull::new(ptr::null_mut::<u8>().wrapping_add(DATA_UNPROMOTED).cast()).expect("ptr is 1");
 
-pub const fn new_unpromoted() -> NonNull<Shared> {
-    NonNull::new(ptr::null_mut::<u8>().wrapping_add(DATA_UNPROMOTED).cast()).expect("ptr is 1")
-}
-
 pub fn is_unpromoted(data: *const Shared) -> bool {
     data.addr() & DATA_MASK == DATA_UNPROMOTED
 }
@@ -112,31 +108,14 @@ pub fn as_unpromoted(data: *const Shared) -> Option<usize> {
     }
 }
 
-pub fn into_unpromoted(data: NonNull<Shared>) -> Result<usize, Box<Shared>> {
-    if is_unpromoted(data.as_ptr()) {
-        Ok(data.as_ptr().addr() >> RESERVED_BIT_DATA)
-    } else {
-        Err(unsafe { Box::from_raw(data.as_ptr()) })
-    }
-}
-
 // ===== Unpromoted =====
 
 /// Mask the arbitrary payload with `usize`.
 ///
-/// `Shared` requires that the least significant bit is unset to denote unpromoted buffer.
-///
-/// For convenience, this function mask the value such that the requirements is the most
-/// significant bit is unset.
-///
-/// In other word, `0 <= value <= isize::MAX`.
-///
-/// # Safety
-///
 /// `data` must be unpromoted.
 ///
-/// `value` most significant bit must be unset.
-pub unsafe fn mask_payload(data: *mut Shared, value: usize) -> NonNull<Shared> {
+/// `value` must be less than `isize::MAX`
+pub fn mask_payload(data: *mut Shared, value: usize) -> NonNull<Shared> {
     const MSB: usize = RESERVED_BIT_DATA.rotate_right(RESERVED_BIT_DATA as _);
 
     debug_assert!(is_unpromoted(data));
@@ -146,10 +125,6 @@ pub unsafe fn mask_payload(data: *mut Shared, value: usize) -> NonNull<Shared> {
     unsafe {
         NonNull::new_unchecked(data.with_addr((value << RESERVED_BIT_DATA) | DATA_UNPROMOTED))
     }
-}
-
-pub fn build_vec(ptr: NonNull<u8>, cap: usize, offset: usize) -> Vec<u8> {
-    unsafe { Vec::from_raw_parts(ptr.as_ptr().sub(offset), 0, cap + offset) }
 }
 
 pub fn promote_with(ptr: NonNull<u8>, cap: usize, offset: usize, ref_count: usize) -> NonNull<Shared> {
@@ -233,46 +208,7 @@ pub fn release_into_raw(shared: NonNull<Shared>) -> Option<(NonNull<u8>, usize)>
     // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
     std::sync::atomic::fence(Ordering::Acquire);
 
-    // `Shared` is unique, thus gaining exclusive ownership
+    // `Shared` is unique, thus converting to exclusive ownership is safe
     let shared = unsafe { Box::from_raw(shared.as_ptr()) };
     Some((shared.ptr, shared.cap))
-}
-
-/// Release the `Shared` handle, if the reference is unique, returns the underlying buffer with
-/// given length of initialized data.
-///
-/// # Safety
-///
-/// Caller must ensure that `len` of data is initialized.
-#[allow(clippy::boxed_local, reason = "`Shared` always in the heap")]
-pub unsafe fn release_into_vec(shared: Box<Shared>, len: usize) -> Option<Vec<u8>> {
-    use std::sync::atomic::Ordering;
-
-    // follow the drop procedure from `Arc`
-    if shared.ref_count.fetch_sub(1, Ordering::Release) != 1 {
-        // do not deallocate the heap
-        let _shared = Box::into_raw(shared);
-        return None;
-    }
-
-    // This fence is needed to prevent reordering of use of the data and
-    // deletion of the data.  Because it is marked `Release`, the decreasing
-    // of the reference count synchronizes with this `Acquire` fence. This
-    // means that use of the data happens before decreasing the reference
-    // count, which happens before this fence, which happens before the
-    // deletion of the data.
-    //
-    // As explained in the [Boost documentation][1],
-    //
-    // > It is important to enforce any possible access to the object in one
-    // > thread (through an existing reference) to *happen before* deleting
-    // > the object in a different thread. This is achieved by a "release"
-    // > operation after dropping a reference (any access to the object
-    // > through this reference must obviously happened before), and an
-    // > "acquire" operation before deleting the object.
-    //
-    // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
-    std::sync::atomic::fence(Ordering::Acquire);
-
-    unsafe { Some(Vec::from_raw_parts(shared.ptr.as_ptr(), len, shared.cap)) }
 }

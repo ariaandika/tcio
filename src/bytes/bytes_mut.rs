@@ -146,13 +146,6 @@ impl BytesMut {
             data: shared::NEW_UNPROMOTED,
         }
     }
-
-    pub(crate) fn from_vec(vec: Vec<u8>) -> Self {
-        let (ptr, len, cap) = vec.into_raw_parts();
-        let ptr = NonNull::new(ptr).expect("vec cannot be null");
-        let data = shared::NEW_UNPROMOTED;
-        Self { ptr, len, cap, data, }
-    }
 }
 
 impl Default for BytesMut {
@@ -227,7 +220,7 @@ impl BytesMut {
     // private
 
     /// (ptr, len, cap, data)
-    fn into_raw_parts(self) -> (NonNull<u8>, usize, usize, NonNull<Shared>) {
+    pub(super) fn into_raw_parts(self) -> (NonNull<u8>, usize, usize, NonNull<Shared>) {
         let me = std::mem::ManuallyDrop::new(self);
         (me.ptr, me.len, me.cap, me.data)
     }
@@ -376,13 +369,6 @@ impl BytesMut {
     #[inline]
     pub const fn clear(&mut self) {
         self.len = 0;
-    }
-
-    /// Converts `self` into an immutable [`Bytes`].
-    #[inline]
-    pub fn freeze(self) -> Bytes {
-        let (ptr, len, cap, data) = self.into_raw_parts();
-        Bytes::from_bytes_mut(ptr, len, cap, data)
     }
 
     /// Removes the bytes from the current view, returning them in a new `BytesMut` handle.
@@ -546,7 +532,7 @@ impl BytesMut {
 
         if let Ok(offset) = shared::as_unpromoted_non_null(self.data) {
             // SAFETY: `self.data` is unpromoted
-            self.data = unsafe { shared::mask_payload(self.data.as_ptr(), offset + count) };
+            self.data = shared::mask_payload(self.data.as_ptr(), offset + count);
         }
 
         self.ptr = unsafe { self.ptr.add(count) };
@@ -670,6 +656,119 @@ impl BytesMut {
     }
 }
 
+// ===== Convertion =====
+
+impl BytesMut {
+    /// Converts `self` into an immutable [`Bytes`].
+    #[inline]
+    pub fn freeze(self) -> Bytes {
+        Bytes::from(self)
+    }
+}
+
+impl From<Box<[u8]>> for BytesMut {
+    #[inline]
+    fn from(value: Box<[u8]>) -> Self {
+        let ptr = NonNull::new(Box::into_raw(value)).expect("box cannot be null");
+        Self {
+            ptr: ptr.cast(),
+            len: ptr.len(),
+            cap: ptr.len(),
+            data: shared::NEW_UNPROMOTED,
+        }
+    }
+}
+
+impl From<Vec<u8>> for BytesMut {
+    #[inline]
+    fn from(value: Vec<u8>) -> Self {
+        let (ptr, len, cap) = value.into_raw_parts();
+        Self {
+            ptr: NonNull::new(ptr).expect("vec cannot be null"),
+            len,
+            cap,
+            data: shared::NEW_UNPROMOTED,
+        }
+    }
+}
+
+impl From<Bytes> for BytesMut {
+    /// Converts a [`Bytes`] into a [`BytesMut`].
+    ///
+    /// If [`Bytes::is_unique`] returns `true`, the buffer is consumed and returned.
+    ///
+    /// Otherwise, the buffer is copied to new allocation.
+    #[inline]
+    fn from(value: Bytes) -> Self {
+        let (ptr, len, data) = value.into_raw_parts();
+
+        let Some(data) = NonNull::new(data) else {
+            let slice = unsafe { slice::from_raw_parts(ptr.as_ptr(), len) };
+            return Self::copy_from_slice(slice);
+        };
+
+        match shared::as_unpromoted_non_null(data) {
+            Ok(_) => Self {
+                ptr,
+                len,
+                cap: len,
+                data,
+            },
+            Err(shared) => {
+                // `BytesMut` requires guarantee that current buffer slice is unique from the
+                // entire buffer
+                if shared::is_unique(shared) {
+                    Self {
+                        ptr,
+                        len,
+                        cap: len,
+                        data,
+                    }
+                } else {
+                    shared::release(data);
+                    let slice = unsafe { slice::from_raw_parts(ptr.as_ptr(), len) };
+                    Self::copy_from_slice(slice)
+                }
+            }
+        }
+    }
+}
+
+impl From<BytesMut> for Box<[u8]> {
+    #[inline]
+    fn from(value: BytesMut) -> Self {
+        Vec::from(value).into_boxed_slice()
+    }
+}
+
+impl From<BytesMut> for Vec<u8> {
+    fn from(value: BytesMut) -> Self {
+        let (ptr, len, cap, data) = value.into_raw_parts();
+        let ptr = ptr.as_ptr();
+        let (base_ptr, base_cap) = match shared::as_unpromoted(data.as_ptr()) {
+            Some(offset) => unsafe { (ptr.sub(offset), cap + offset) },
+            None => match shared::release_into_raw(data) {
+                Some((ptr, cap)) => (ptr.as_ptr(), cap),
+                None => return unsafe { &mut *ptr::slice_from_raw_parts_mut(ptr, len) }.to_vec(),
+            },
+        };
+        if ptr != base_ptr {
+            // `BytesMut` has been `advanced`, but `Vec` cannot represent that
+            //
+            // thus we need to copy the bytes backwards
+            unsafe {
+                let offset = ptr.offset_from_unsigned(base_ptr);
+                if offset > len {
+                    ptr::copy_nonoverlapping(ptr, base_ptr, len)
+                } else {
+                    ptr::copy(ptr, base_ptr, len)
+                }
+            }
+        }
+        unsafe { Vec::from_raw_parts(base_ptr, len, base_cap) }
+    }
+}
+
 // ===== std traits =====
 
 impl std::fmt::Debug for BytesMut {
@@ -710,8 +809,6 @@ impl AsMut<[u8]> for BytesMut {
 
 crate::macros::from! {
     impl BytesMut;
-    fn from(value: Vec<u8>) { BytesMut::from_vec(value) }
-    fn from(value: Bytes) { value.into_mut() }
     fn from(value: String) { BytesMut::from(value.into_bytes()) }
 }
 

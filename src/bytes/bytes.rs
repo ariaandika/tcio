@@ -96,86 +96,6 @@ impl Default for Bytes {
     }
 }
 
-impl From<Vec<u8>> for Bytes {
-    #[inline]
-    fn from(vec: Vec<u8>) -> Self {
-        let (ptr, len, cap) = vec.into_raw_parts();
-        let ptr = NonNull::new(ptr).expect("vec cannot be null");
-
-        if len == 0 {
-            Self::new_empty_with_ptr(ptr)
-        } else if cap == len {
-            // this is the ideal form, `len` and `cap` can be stored in single field
-            let data = AtomicPtr::new(shared::NEW_UNPROMOTED.as_ptr());
-            Self { ptr, len, data }
-        } else {
-            // we cannot start in unpromoted for `Shared` storage
-            // - we have nowhere to store capacity of the vector
-            // - the `data` field already contains the offset from the start ptr
-            // - if `len < cap`, there is a "tail offset", thus
-            //   `len` cannot be treated as capacity
-            // Current methods:
-            // - `shared::promote_with_vec`: allocate `AtomicUsize`, pointer, and capacity (3 word)
-            // Alternative:
-            // - `into_boxed_slice`: reallocate and copy the bytes, as expensive as the vector length
-            let data = AtomicPtr::new(shared::promote_with(ptr, cap, 0, 1).as_ptr());
-            Self { ptr, len, data }
-        }
-    }
-}
-
-impl From<Box<[u8]>> for Bytes {
-    #[inline]
-    fn from(value: Box<[u8]>) -> Self {
-        let len = value.len();
-        let ptr = NonNull::new(Box::into_raw(value).cast()).expect("box cannot be null");
-
-        if len == 0 {
-            Self::new_empty_with_ptr(ptr)
-        } else {
-            let data = AtomicPtr::new(shared::NEW_UNPROMOTED.as_ptr());
-            Self { ptr, len, data }
-        }
-    }
-}
-
-impl Bytes {
-    /// Should only be used by `BytesMut`
-    pub(super) fn from_bytes_mut(ptr: NonNull<u8>, len: usize, cap: usize, data: NonNull<Shared>) -> Self {
-        match shared::as_unpromoted(data.as_ptr()) {
-            Some(offset) => {
-                // here `Bytes` will contains the entire buffer, then fix the offset and tail
-                // offset afterwards
-
-                // SAFETY: `offset` correctly represent offset from the first pointer in the
-                // allocation
-                let ptr = unsafe { ptr.sub(offset) };
-                let mut me = Self {
-                    ptr,
-                    len: cap,
-                    data: AtomicPtr::new(data.as_ptr()),
-                };
-                if offset != 0 {
-                    me.advance(offset);
-                }
-                if len < cap {
-                    // this introduce "tail offset",
-                    // which cannot be represented in unpromoted,
-                    // thus required to be promoted
-                    drop(me.split_off(len));
-                }
-                me
-            },
-            // in promoted state, the capacity is tracked in shared buffer
-            None => Self {
-                ptr,
-                len,
-                data: AtomicPtr::new(data.as_ptr()),
-            }
-        }
-    }
-}
-
 // ===== Getters =====
 
 impl Bytes {
@@ -402,7 +322,7 @@ impl Bytes {
         let data = *self.data.get_mut();
         if let Some(offset) = shared::as_unpromoted(data) {
             // SAFETY: `data` is unpromoted
-            *self.data.get_mut() = unsafe { shared::mask_payload(data, offset + count).as_ptr() };
+            *self.data.get_mut() = shared::mask_payload(data, offset + count).as_ptr();
         }
 
         // SAFETY: caller ensure `count <= self.len`, and `ptr` is valid until `self.cap` forward
@@ -614,7 +534,95 @@ impl Bytes {
     }
 }
 
-// ===== Conversion =====
+// ===== Convertion =====
+
+impl Bytes {
+    pub(super) fn into_raw_parts(self) -> (NonNull<u8>, usize, *mut Shared) {
+        let mut me = ManuallyDrop::new(self);
+        (me.ptr, me.len, *me.data.get_mut())
+    }
+
+    /// Converts a [`Bytes`] into a [`BytesMut`].
+    ///
+    /// If [`Bytes::is_unique`] returns `true`, the buffer is consumed and returned.
+    ///
+    /// Otherwise, the buffer is copied to new allocation.
+    #[inline]
+    pub fn into_mut(self) -> BytesMut {
+        BytesMut::from(self)
+    }
+}
+
+impl From<Box<[u8]>> for Bytes {
+    #[inline]
+    fn from(value: Box<[u8]>) -> Self {
+        let len = value.len();
+        let ptr = NonNull::new(Box::into_raw(value).cast()).expect("box cannot be null");
+        if len == 0 {
+            Self::new_empty_with_ptr(ptr)
+        } else {
+            let data = AtomicPtr::new(shared::NEW_UNPROMOTED.as_ptr());
+            Self { ptr, len, data }
+        }
+    }
+}
+
+impl From<Vec<u8>> for Bytes {
+    #[inline]
+    fn from(vec: Vec<u8>) -> Self {
+        let (ptr, len, cap) = vec.into_raw_parts();
+        let ptr = NonNull::new(ptr).expect("vec cannot be null");
+        if len == 0 {
+            Self::new_empty_with_ptr(ptr)
+        } else if len == cap {
+            // this is the ideal form, `len` and `cap` can be stored in single field
+            let data = AtomicPtr::new(shared::NEW_UNPROMOTED.as_ptr());
+            Self { ptr, len, data }
+        } else {
+            // we cannot start in unpromoted for `Shared` storage
+            // - we have nowhere to store capacity of the vector
+            // - the `data` field already contains the offset from the start ptr
+            // - if `len < cap`, there is a "tail offset", thus
+            //   `len` cannot be treated as capacity
+            // Current methods:
+            // - `shared::promote_with_vec`: allocate `AtomicUsize`, pointer, and capacity (3 word)
+            // Alternative:
+            // - `into_boxed_slice`: reallocate and copy the bytes, as expensive as the vector length
+            let data = AtomicPtr::new(shared::promote_with(ptr, cap, 0, 1).as_ptr());
+            Self { ptr, len, data }
+        }
+    }
+}
+
+impl From<BytesMut> for Bytes {
+    #[inline]
+    fn from(value: BytesMut) -> Self {
+        let (ptr, len, cap, data) = value.into_raw_parts();
+        if len == 0 {
+            Self::new_empty_with_ptr(ptr)
+        } else if shared::is_unpromoted(data.as_ptr()) {
+            // same procedure as `From<Vec<u8>>`
+            if len == cap {
+                let data = AtomicPtr::new(data.as_ptr());
+                Self { ptr, len, data }
+            } else {
+                let data = AtomicPtr::new(shared::promote_with(ptr, cap, 0, 1).as_ptr());
+                Self { ptr, len, data }
+            }
+        } else {
+            // in promoted state, capacity is tracked in `Shared`
+            let data = AtomicPtr::new(data.as_ptr());
+            Self { ptr, len, data }
+        }
+    }
+}
+
+impl From<Bytes> for Box<[u8]> {
+    #[inline]
+    fn from(value: Bytes) -> Self {
+        Vec::from(value).into_boxed_slice()
+    }
+}
 
 impl From<Bytes> for Vec<u8> {
     /// Converts a [`Bytes`] into a byte vector.
@@ -623,80 +631,32 @@ impl From<Bytes> for Vec<u8> {
     ///
     /// Otherwise, the buffer is copied to new allocation.
     fn from(value: Bytes) -> Self {
-        let mut me = ManuallyDrop::new(value);
-
-        let Some(shared) = NonNull::new(*me.data.get_mut()) else {
-            return me.as_slice().to_vec();
+        let (ptr, len, data) = value.into_raw_parts();
+        let ptr = ptr.as_ptr();
+        let Some(data) = NonNull::new(data) else {
+            return unsafe { &mut *ptr::slice_from_raw_parts_mut(ptr, len) }.to_vec();
         };
-
-        let (base_ptr, cap) = match shared::as_unpromoted(shared.as_ptr()) {
-            Some(offset) => unsafe { (me.ptr.sub(offset), me.len + offset) },
-            None => match shared::release_into_raw(shared) {
-                Some((ptr, cap)) => (ptr, cap),
-                None => return me.as_slice().to_vec(),
-            }
+        let (base_ptr, base_cap) = match shared::as_unpromoted(data.as_ptr()) {
+            Some(offset) => unsafe { (ptr.sub(offset), len + offset) },
+            None => match shared::release_into_raw(data) {
+                Some((ptr, cap)) => (ptr.as_ptr(), cap),
+                None => return unsafe { &mut *ptr::slice_from_raw_parts_mut(ptr, len) }.to_vec(),
+            },
         };
-
-        if me.ptr != base_ptr {
-            // `Bytes` has been `advanced`, `Vec` cannot represent that,
-            // so we can only copy the buffer backwards
+        if ptr != base_ptr {
+            // `Bytes` has been `advanced`, but `Vec` cannot represent that
+            //
+            // thus we need to copy the bytes backwards
             unsafe {
-                let offset = me.ptr.offset_from_unsigned(base_ptr);
-                if offset > me.len {
-                    ptr::copy_nonoverlapping(me.ptr.as_ptr(), base_ptr.as_ptr(), me.len)
+                let offset = ptr.offset_from_unsigned(base_ptr);
+                if offset > len {
+                    ptr::copy_nonoverlapping(ptr, base_ptr, len)
                 } else {
-                    ptr::copy(me.ptr.as_ptr(), base_ptr.as_ptr(), me.len)
+                    ptr::copy(ptr, base_ptr, len)
                 }
             }
         }
-
-        unsafe { Vec::from_raw_parts(base_ptr.as_ptr(), me.len, cap) }
-    }
-}
-
-impl Bytes {
-    /// Converts a [`Bytes`] into a [`BytesMut`].
-    ///
-    /// If [`Bytes::is_unique`] returns `true`, the buffer is consumed and returned.
-    ///
-    /// Otherwise, the buffer is copied to new allocation.
-    pub fn into_mut(self) -> BytesMut {
-        let mut me = ManuallyDrop::new(self);
-
-        let Some(shared) = NonNull::new(*me.data.get_mut()) else {
-            return BytesMut::from_vec(me.as_slice().to_vec());
-        };
-
-        match shared::into_unpromoted(shared) {
-            Ok(offset) => {
-                let mut bufm = BytesMut::from_vec(shared::build_vec(me.ptr, me.len, offset));
-                unsafe {
-                    // in contrast with `Vec`, `BytesMut` can represent `advance`,
-                    // so no copying is required
-                    bufm.advance_unchecked(offset);
-                    // `build_vec` returns zero length vec
-                    bufm.set_len(me.len);
-                }
-                bufm
-            }
-            Err(shared) => {
-                let base_ptr = shared.as_non_null();
-                let cap = shared.capacity();
-                match unsafe { shared::release_into_vec(shared, cap) } {
-                    Some(vec) => {
-                        let mut bufm = BytesMut::from_vec(vec);
-                        unsafe {
-                            // handle head offset
-                            bufm.advance_unchecked(me.ptr.offset_from_unsigned(base_ptr));
-                            // handle tail offset
-                            bufm.set_len(me.len);
-                        }
-                        bufm
-                    }
-                    None => BytesMut::from_vec(me.as_slice().to_vec()),
-                }
-            }
-        }
+        unsafe { Vec::from_raw_parts(base_ptr, len, base_cap) }
     }
 }
 
@@ -779,7 +739,6 @@ crate::macros::from! {
     fn from(value: &'static [u8]) { Self::from_static(value) }
     fn from(value: &'static str) { Self::from_static(value.as_bytes()) }
     fn from(value: String) { Self::from(value.into_bytes()) }
-    fn from(value: BytesMut) { value.freeze() }
 }
 
 impl Eq for Bytes {}
