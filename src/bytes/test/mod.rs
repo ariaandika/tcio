@@ -1,2 +1,2 @@
-mod test_bytes;
-mod test_bytes_mut;
+mod bytes_test;
+mod bytes_mut_test;

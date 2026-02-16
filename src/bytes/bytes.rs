@@ -123,14 +123,6 @@ impl Bytes {
     pub const fn as_slice(&self) -> &[u8] {
         unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
     }
-
-    // private
-
-    #[cfg(test)]
-    #[doc(hidden)]
-    pub(crate) fn data(&self) -> &AtomicPtr<Shared> {
-        &self.data
-    }
 }
 
 // ===== Split/Slice =====
