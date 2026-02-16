@@ -600,13 +600,13 @@ impl From<BytesMut> for Bytes {
         let (ptr, len, cap, data) = value.into_raw_parts();
         if len == 0 {
             Self::new_empty_with_ptr(ptr)
-        } else if shared::is_unpromoted(data.as_ptr()) {
+        } else if let Some(offset) = shared::as_unpromoted(data.as_ptr()) {
             // same procedure as `From<Vec<u8>>`
             if len == cap {
                 let data = AtomicPtr::new(data.as_ptr());
                 Self { ptr, len, data }
             } else {
-                let data = AtomicPtr::new(shared::promote_with(ptr, cap, 0, 1).as_ptr());
+                let data = AtomicPtr::new(shared::promote_with(ptr, cap, offset, 1).as_ptr());
                 Self { ptr, len, data }
             }
         } else {
