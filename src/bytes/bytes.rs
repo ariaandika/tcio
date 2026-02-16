@@ -634,13 +634,13 @@ impl From<Bytes> for Vec<u8> {
         let (ptr, len, data) = value.into_raw_parts();
         let ptr = ptr.as_ptr();
         let Some(data) = NonNull::new(data) else {
-            return unsafe { &mut *ptr::slice_from_raw_parts_mut(ptr, len) }.to_vec();
+            return unsafe { slice::from_raw_parts(ptr, len) }.to_vec();
         };
         let (base_ptr, base_cap) = match shared::as_unpromoted(data.as_ptr()) {
             Some(offset) => unsafe { (ptr.sub(offset), len + offset) },
             None => match shared::release_into_raw(data) {
                 Some((ptr, cap)) => (ptr.as_ptr(), cap),
-                None => return unsafe { &mut *ptr::slice_from_raw_parts_mut(ptr, len) }.to_vec(),
+                None => return unsafe { slice::from_raw_parts(ptr, len) }.to_vec(),
             },
         };
         if ptr != base_ptr {

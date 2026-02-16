@@ -749,7 +749,7 @@ impl From<BytesMut> for Vec<u8> {
             Some(offset) => unsafe { (ptr.sub(offset), cap + offset) },
             None => match shared::release_into_raw(data) {
                 Some((ptr, cap)) => (ptr.as_ptr(), cap),
-                None => return unsafe { &mut *ptr::slice_from_raw_parts_mut(ptr, len) }.to_vec(),
+                None => return unsafe { slice::from_raw_parts_mut(ptr, len) }.to_vec(),
             },
         };
         if ptr != base_ptr {
