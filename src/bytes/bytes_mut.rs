@@ -95,7 +95,11 @@ impl Drop for BytesMut {
     #[inline]
     fn drop(&mut self) {
         match shared::as_unpromoted(self.data.as_ptr()) {
-            Some(offset) => shared::deallocate(self.ptr, self.cap, offset),
+            Some(offset) => {
+                if self.cap != 0 {
+                    shared::deallocate(self.ptr, self.cap, offset);
+                }
+            },
             None => shared::release(self.data),
         }
     }
