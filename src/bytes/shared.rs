@@ -36,6 +36,7 @@ impl Shared {
     }
 
     pub fn grow(&mut self, new_cap: usize) -> NonNull<u8> {
+        debug_assert!(self::is_unique(self));
         self.ptr = self::grow(self.ptr, self.cap, new_cap);
         self.cap = new_cap;
         self.ptr

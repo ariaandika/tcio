@@ -236,33 +236,16 @@ impl BytesMut {
     /// Reserves capacity for at least `additional` more bytes to be inserted.
     #[inline]
     pub fn reserve(&mut self, additional: usize) {
-        assert!(!self.cap.overflowing_add(additional).1);
         if additional == 0 {
             return;
         }
-        if self.cap - self.len >= additional {
-            return;
+        if self.cap - self.len < additional {
+            self.reserve_inner(additional);
         }
-        self.reserve_inner(additional);
     }
 
-    /// Try to reclaim additional capacity without allocating.
-    ///
-    /// Returns `true` if reclaiming success without allocating.
-    #[inline]
-    pub fn try_reclaim(&mut self, additional: usize) {
-        if additional == 0 {
-            return;
-        }
-        if self.cap - self.len >= additional {
-            return;
-        }
-        if self.cap.overflowing_add(additional).1 {
-            return;
-        }
-        self.reserve_inner(additional);
-    }
-
+    /// Separate allocation call to allow `reserve` te be inlined
+    #[inline(never)]
     fn reserve_inner(&mut self, additional: usize) {
         let (base_raw, offset) = match shared::as_unpromoted_non_null(self.data) {
             Ok(offset) => (
@@ -304,10 +287,19 @@ impl BytesMut {
             return;
         }
 
+        let base_cap = match base_raw {
+            Some((_, base_cap)) => base_cap,
+            None => self.cap + offset,
+        };
+        let exp = base_cap.checked_mul(2);
+        let add = (self.len + offset).checked_add(additional);
+        let Some(new_cap) = cmp::max(exp, add) else {
+            panic!("capacity overflow");
+        };
+
         // allocation
         match base_raw {
             Some((base_ptr, base_cap)) => {
-                let new_cap = cmp::max(base_cap * 2, self.len + offset + additional);
                 let new_ptr = if shared::is_unpromoted(self.data.as_ptr()) {
                     shared::grow(base_ptr, base_cap, new_cap)
                 } else {
@@ -319,8 +311,6 @@ impl BytesMut {
             None => {
                 // the buffer is not exclusive, `shared::grow` cannot be used, new allocation is
                 // required
-                let base_cap = self.cap + offset;
-                let new_cap = cmp::max(base_cap * 2, self.len + offset + additional);
                 let new_base_ptr = shared::allocate(new_cap);
                 unsafe {
                     ptr::copy_nonoverlapping(
