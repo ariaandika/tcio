@@ -360,23 +360,6 @@ impl BytesMut {
         }
     }
 
-    /// Shortens the buffer, dropping the last `len` bytes and keeping the rest.
-    ///
-    /// If `off` is greater or equal to the `BytesMut` length, this will clear the bytes.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use tcio::bytes::BytesMut;
-    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
-    /// bytes.truncate_off(b"@example.com".len());
-    /// assert_eq!(bytes.as_slice(), b"userinfo");
-    /// ```
-    #[inline]
-    pub const fn truncate_off(&mut self, off: usize) {
-        self.len = self.len.saturating_sub(off);
-    }
-
     /// Clears the `BytesMut`, removing all bytes.
     #[inline]
     pub const fn clear(&mut self) {
