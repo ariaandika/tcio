@@ -51,7 +51,7 @@ fn advancing((mut bytes, expect): Cx) -> Cx {
 }
 
 fn truncating((mut bytes, expect): Cx) -> Cx {
-    bytes.truncate_off(2);
+    bytes.truncate(bytes.len() - 2);
     assert_eq!(bytes.as_slice(), &expect[..expect.len() - 2]);
     (bytes, &expect[..expect.len() - 2])
 }
@@ -183,4 +183,65 @@ fn test_from_vec_excess_into_vec() {
 #[test]
 fn test_from_vec_excess_into_mut() {
     behavior!(from_vec_excess, into_shared);
+}
+
+// ===== Allocation =====
+
+#[test]
+fn test_reserve() {
+    let mut bytes = BytesMut::copy_from_slice(DATA);
+    let base_ptr = bytes.as_ptr();
+    let base_cap = bytes.capacity();
+
+    // Offset Reclaim
+    bytes.advance(12);
+    assert_eq!(bytes.capacity(), base_cap - 12);
+    bytes.reserve(12);
+    // this ensure reclaim, if this would have reallocate, the capacity will be more excessive
+    assert_eq!(bytes.capacity(), base_cap);
+    bytes.as_slice();
+
+
+    bytes.extend_from_slice(&DATA[..12]);
+    assert_eq!(bytes.capacity(), base_cap);
+
+    // Reallocate Owned
+    bytes.reserve(4);
+    assert!(bytes.capacity() > base_cap);
+    let base_cap = bytes.capacity();
+    bytes.as_slice();
+
+
+    while let rem = bytes.capacity() - bytes.len() && rem != 0 {
+        bytes.extend_from_slice(DATA.get(..rem).unwrap_or(DATA));
+    }
+
+    // Tail Reclaim
+    bytes.split_off(bytes.len() - 4);
+    assert_eq!(bytes.capacity(), base_cap - 4);
+    bytes.reserve(4);
+    assert_eq!(bytes.capacity(), base_cap);
+
+
+    bytes.extend_from_slice(&DATA[..4]);
+    // Reallocate Exclusive
+    bytes.reserve(4);
+    assert!(bytes.capacity() > base_cap);
+    let base_cap = bytes.capacity();
+    bytes.as_slice();
+
+
+    while let rem = bytes.capacity() - bytes.len() && rem != 0 {
+        bytes.extend_from_slice(DATA.get(..rem).unwrap_or(DATA));
+    }
+    assert_eq!(bytes.len(), bytes.capacity());
+
+    // Reallocate Shared
+    let vec = bytes.to_vec();
+    let split = bytes.split_off(bytes.len() - 4);
+    bytes.reserve(4);
+    assert_ne!(bytes.as_ptr(), base_ptr);
+    assert!(bytes.capacity() > base_cap);
+    drop(split);
+    assert_eq!(bytes.as_slice(), &vec[..vec.len() - 4]);
 }
