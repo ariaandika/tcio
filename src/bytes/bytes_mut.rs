@@ -236,7 +236,7 @@ impl BytesMut {
     /// Reserves capacity for at least `additional` more bytes to be inserted.
     #[inline]
     pub fn reserve(&mut self, additional: usize) {
-        assert!(self.cap.overflowing_add(additional).1);
+        assert!(!self.cap.overflowing_add(additional).1);
         if additional == 0 {
             return;
         }
@@ -257,7 +257,7 @@ impl BytesMut {
         if self.cap - self.len >= additional {
             return;
         }
-        if self.cap.checked_add(additional).is_none() {
+        if self.cap.overflowing_add(additional).1 {
             return;
         }
         self.reserve_inner(additional);
@@ -322,9 +322,17 @@ impl BytesMut {
                 let base_cap = self.cap + offset;
                 let new_cap = cmp::max(base_cap * 2, self.len + offset + additional);
                 let new_base_ptr = shared::allocate(new_cap);
+                unsafe {
+                    ptr::copy_nonoverlapping(
+                        self.ptr.as_ptr().add(offset),
+                        new_base_ptr.as_ptr(),
+                        self.len
+                    )
+                };
                 shared::release(self.data);
-                self.ptr = unsafe { new_base_ptr.add(offset) };
-                self.cap = new_cap - offset;
+                self.ptr = new_base_ptr;
+                self.cap = new_cap;
+                self.data = shared::NEW_UNPROMOTED;
             }
         }
     }
