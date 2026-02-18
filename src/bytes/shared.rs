@@ -1,3 +1,31 @@
+//! `Shared` internal documentation.
+//!
+//! Shared is an memory management where it starts just like regular heap allocation, but later can
+//! be "promoted" into shared reference counted allocation.
+//!
+//! # Pointer bit flag
+//!
+//! `Shared` have an alignment of 8, which is multiple of 2. Therefore, the pointer will always an
+//! even number, thus the least significant bit will always be unset. This bit is used to denote
+//! whether current allocation is regular allocation or a shared allocation.
+//!
+//! # Unpromoted / Promoted
+//!
+//! When the allocation is in regular state, this will called the "unpromoted" state. And when the
+//! allocation is in shared state, this will called the "promoted" state.
+//!
+//! # Additional payload
+//!
+//! When in "promoted" state, the pointer points to the heap allocation that store the reference
+//! counter and allocation information.
+//!
+//! In the other hand, when in "unpromoted" state, it will be an invalid pointer with its LSB set.
+//! User can use the rest of the bits to store arbitrary data. The data is a pointer sized unsigned
+//! integer minus one bit (`0..=isize::MAX`).
+//!
+//! # Private API
+//!
+//! This is not a public API. Currently, `Shared` is used internally by `Bytes` and `BytesMut`.
 use core::ptr::{self, NonNull};
 use core::sync::atomic::AtomicUsize;
 use core::alloc::Layout;
@@ -15,8 +43,6 @@ const DATA_UNPROMOTED: usize = 0b1;
 const DATA_MASK: usize = 0b1;
 
 const RESERVED_BIT_DATA: usize = 1;
-
-/// RESERVED_BIT_DATA must be `1` because of logic below
 const _: [(); 1] = [(); RESERVED_BIT_DATA];
 
 #[derive(Debug)]

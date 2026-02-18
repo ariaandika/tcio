@@ -1,3 +1,84 @@
+//! `BytesMut` internal documentation.
+//!
+//! # Memory Management
+//!
+//! `BytesMut` uses [`Shared`] for memory management, a regular heap allocation that can be
+//! "promoted" to a reference counted allocation. In this docs, the terms "unpromoted" and
+//! "promoted" are explained in the `Shared` documentation.
+//!
+//! Additionally, `BytesMut` have guarantee that the slice it contains are unique to the entire
+//! allocation. In contrast with [`Bytes`], the slice will never overlap.
+//!
+//! ```not_rust
+//! Shared  : [-------------]
+//! Bytes   : [---]
+//! Bytes   : [-----]
+//! BytesMut:        [------]
+//! ```
+//!
+//! This allows for mutable reference to the underlying slice. Available via
+//! [`BytesMut::as_mut_slice`].
+//!
+//! # Advancing
+//!
+//! `BytesMut` implement [`Buf`] which represent a cursor to mark a read data.
+//!
+//! In "unpromoted" state, the offset is stored in the `data` field.
+//!
+//! In "promoted" state, the advance offset is the same as pointer offset from the beginning of the
+//! allocation.
+//!
+//! # Capacity Reclaim
+//!
+//! In "unpromoted" state, `BytesMut` can be advanced, leaving the beginning of the allocation
+//! unused. When reserving, `BytesMut` can "reclaim" back this leftover allocation, gaining
+//! capacity without reallocating.
+//!
+//! Reclaiming in this state works by copying the initialized data backwards to the beginning of
+//! the allocation. The copying is restricted to only use the `copy_nonoverlapping` function.
+//! Therefore, reclaiming only happens if the backward copy will not overlap. In other words, the
+//! offset length should be larger than the initialized data length.
+//!
+//! In "promoted" state, `BytesMut` can only reclaim allocation if its the only instance that
+//! holds the `Shared` data. In addition to copying the initialized data backward, `BytesMut` can
+//! also reclaim leftover allocation that are "ahead" of its slice.
+//!
+//! Case 1
+//!
+//! In the following case, it will copy the data backwards.
+//!
+//! ```not_rust
+//! Shared  : [--------------]
+//! BytesMut:         [------] (before)
+//! BytesMut: [------________] (after reclaim)
+//! ```
+//!
+//! If the copy will overlap, reclaim will not be performed.
+//!
+//! ```not_rust
+//! Shared  : [--------------]
+//! BytesMut:     [----------] (cannot reclaim)
+//! ```
+//!
+//! Case 2
+//!
+//! In the following case, the leftover allocation will also be reclaimed.
+//!
+//! ```not_rust
+//! Shared  : [--------------]
+//! BytesMut: [------]         (before)
+//! BytesMut: [------________] (after reclaim)
+//! ```
+//!
+//! Case 3
+//!
+//! In the following case, it combine the logic from case 1 and 2.
+//!
+//! ```not_rust
+//! Shared  : [--------------]
+//! BytesMut:        [---]     (before)
+//! BytesMut: [---___________] (after)
+//! ```
 use std::cmp;
 use std::mem::MaybeUninit;
 use std::ptr::{self, NonNull};
@@ -6,81 +87,79 @@ use std::slice;
 use crate::bytes::shared::{self, Shared};
 use crate::bytes::{Buf, Bytes, UninitSlice};
 
-// BytesMut is a unique `&mut [u8]` over a shared heap allocated `[u8]`
-//
-// (heap)  : [------u8------]
-// BytesMut: [--u8--]
-// BytesMut:         [--u8--]
-
-// # lazy shared allocation
-//
-// BytesMut have an optimization where at the start it is created,
-// no shared heap is allocated, it is in `Owned` state
-//
-// therefore, if the bytes is not splitted, no additional heap is ever allocated
-//
-// this is denoted by the `data` field's least significant bit:
-// - if the LSB is set, it does not yet allocate, `data` is invalid pointer
-// - if the LSB is unset, `data` is a valid pointer to the shared heap allocation
-//
-// this can be achieved because `Shared` have even number memory alignment,
-// thus the pointer LSB is always unset
-//
-// when shared memory is required, BytesMut switched to `Shared` state,
-// the `Shared` struct is allocated to handle the underlying buffer lifecycle
-
-// # `advance`
-//
-// in `Owned` state, the rest of the `data` field bit represent the `advance` value of `BytesMut`,
-// that is only `size_of::<usize>() - 1` bit
-//
-// this is sufficient, because allocated objects can never be larger than `isize::MAX` bytes
-
-// # Capacity Reclaim
-//
-// since BytesMut keep track of the original buffer,
-// it can "reclaim" back a leftover shared allocation,
-// gaining capacity without allocation
-//
-// reclaiming will only be performed when BytesMut is in `Owned` state,
-// or it is unique in `Shared` state, that is,
-// when there is only one reference exists to the shared buffer
-//
-// Case 1
-//
-// (heap)  : [--------------]
-// BytesMut:         [------] (before)
-// BytesMut: [------________] (after)
-//
-// in this case, it attempt to copy the data backwards
-//
-// copying only performed if offset and data does not overlap
-//
-// (heap)  : [--------------]
-// BytesMut:     [----------]
-//
-// so in this case it will not reclaim
-//
-// Case 2
-//
-// (heap)  : [--------------]
-// BytesMut: [------]         (before)
-// BytesMut: [------________] (after)
-//
-// in this case, reclaiming will always succeed
-//
-// Case 3
-//
-// (heap)  : [--------------]
-// BytesMut:     [------]     (before)
-// BytesMut: [------________] (after)
-//
-// in this case, it combine the logic from case 1 and 2
-
 const _: [(); size_of::<usize>() * 4] = [(); size_of::<BytesMut>()];
 const _: [(); size_of::<usize>() * 4] = [(); size_of::<Option<BytesMut>>()];
 
-/// A unique reference to a contiguous slice of memory.
+/// A contiguous growable in memory buffer.
+///
+/// Semantically, this is similar to `Vec<u8>` with additional features.
+///
+/// # Usage
+///
+/// `BytesMut` are intended to be used in networking, where parsing bytes that involves splitting
+/// bytes is a cheap operation.
+///
+/// ```
+/// use tcio::bytes::{BytesMut, Buf};
+///
+/// let mut buffer = BytesMut::with_capacity(1024);
+///
+/// // pretend that we read data from TCP
+/// buffer.extend_from_slice(b"GET / HTTP/1.1\r\n\r\n");
+///
+/// let at = buffer.iter().position(|&e|e == b' ').unwrap();
+///
+/// // this new instance does not allocate new memory
+/// let method: BytesMut = buffer.split_to(at);
+///
+/// assert_eq!(&method, b"GET");
+///
+/// buffer.advance(1);
+/// assert_eq!(&buffer, b"/ HTTP/1.1\r\n\r\n");
+/// ```
+///
+/// # Capacity and reallocation
+///
+/// The capacity and reallocation behavior are very similar to the [`Vec`] type. See its struct
+/// documentation for more details.
+///
+/// Additionally, `BytesMut` will allocate additonal small memory on demand, that upgrade the
+/// buffer which allows the allocation to be shared among multiple instance of `Bytes` or
+/// `BytesMut`. This makes bytes splitting a cheap operation.
+///
+/// # Splitting
+///
+/// Unlike `Vec::split_off`, [`BytesMut::split_off`] and [`BytesMut::split_to`] **will not**
+/// allocate new memory. The new `BytesMut` instance will point to different slice of the memory,
+/// but still uses the same allocation.
+///
+/// # [`Buf`]/[`BufMut`]
+///
+/// `BytesMut` implement `Buf` and `BufMut`. See its documentation for more details.
+///
+/// ```
+/// # let data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+/// use tcio::bytes::{BytesMut, Buf, BufMut};
+///
+/// let mut read_buf = BytesMut::copy_from_slice(&data);
+/// let mut write_buf = BytesMut::with_capacity(read_buf.len());
+///
+/// while let Some(byte) = read_buf.try_get_u8() {
+///     if byte.is_multiple_of(2) {
+///         write_buf.put_u8(byte);
+///     }
+/// }
+/// ```
+///
+/// [`BufMut`]: crate::bytes::BufMut
+///
+/// # Conversion
+///
+/// `BytesMut` can be created from `Vec<u8>` or `Box<[u8]>` via the [`From`] implementation. It
+/// will just reuse the buffer without any copying or reallocation.
+///
+/// `BytesMut` can also be converted to `Vec<u8>` or `Box<[u8]>`. But in this case, it **may**
+/// reuse the buffer if it can. Otherwise, a copy and allocation is required.
 pub struct BytesMut {
     ptr: NonNull<u8>,
     len: usize,
@@ -108,9 +187,9 @@ impl Drop for BytesMut {
 // ===== Constructor =====
 
 impl BytesMut {
-    /// Create new empty [`BytesMut`].
+    /// Constructs a new, empty `BytesMut`.
     ///
-    /// This function does not allocate.
+    /// This method does not allocate.
     #[inline]
     pub const fn new() -> Self {
         Self {
@@ -121,9 +200,9 @@ impl BytesMut {
         }
     }
 
-    /// Create new empty [`BytesMut`] with at least specified capacity.
+    /// Constructs a new, empty `BytesMut` with at least specified capacity.
     ///
-    /// If `capacity` is zero, this method will not allocate.
+    /// If `capacity` is zero, the buffer will not allocate.
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
         if capacity == 0 {
@@ -137,7 +216,7 @@ impl BytesMut {
         }
     }
 
-    /// Create new [`BytesMut`] by copying given bytes.
+    /// Constructs new `BytesMut`, and copy the given bytes to the buffer.
     #[inline]
     pub fn copy_from_slice(slice: &[u8]) -> Self {
         if slice.is_empty() {
@@ -181,7 +260,7 @@ impl BytesMut {
         self.len == 0
     }
 
-    /// Returns the bytes that `BytesMut` can hold without reallocating.
+    /// Returns the total number of bytes that `BytesMut` can hold without reallocating.
     #[inline]
     pub const fn capacity(&self) -> usize {
         self.cap
@@ -213,7 +292,32 @@ impl BytesMut {
         self.ptr.as_ptr()
     }
 
-    /// Returns the remaining spare capacity of the `BytesMut` as a slice of `MaybeUninit<T>`.
+    /// Returns the remaining spare capacity of the `BytesMut` as a slice of `MaybeUninit<u8>`.
+    ///
+    /// The returned slice can be used to fill the buffer with data (e.g. by reading from a file)
+    /// before marking the data as initialized using the [`set_len`] method.
+    ///
+    /// [`set_len`]: Self::set_len
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::BytesMut;
+    /// let mut v = BytesMut::with_capacity(10);
+    ///
+    /// let uninit = v.spare_capacity_mut();
+    /// assert!(uninit.len() >= 10);
+    ///
+    /// // Fill in the first 3 elements.
+    /// uninit[0].write(2);
+    /// uninit[1].write(4);
+    /// uninit[2].write(6);
+    ///
+    /// // Mark the first 3 elements of the vector as being initialized.
+    /// unsafe { v.set_len(3) };
+    ///
+    /// assert_eq!(&v, &[2, 4, 6]);
+    /// ```
     #[inline]
     pub const fn spare_capacity_mut(&mut self) -> &mut [MaybeUninit<u8>] {
         unsafe {
@@ -234,6 +338,17 @@ impl BytesMut {
 
 impl BytesMut {
     /// Reserves capacity for at least `additional` more bytes to be inserted.
+    ///
+    /// Before reallocating, `BytesMut` will attempt to reclaim any leftover capacity, either from
+    /// unused allocation after calling [`advance`], or other dropped instance capacity that share
+    /// memory with this `BytesMut`.
+    ///
+    /// `BytesMut` may reserve more space to speculatively avoid frequent reallocations.
+    ///
+    /// After calling reserve, capacity will be greater than or equal to `self.len() + additional`.
+    /// Does nothing if capacity is already sufficient.
+    ///
+    /// [`advance`]: crate::bytes::Buf::advance
     #[inline]
     pub fn reserve(&mut self, additional: usize) {
         if additional == 0 {
@@ -245,6 +360,10 @@ impl BytesMut {
     }
 
     /// Separate allocation call to allow `reserve` te be inlined
+    ///
+    /// Before reallocating, this will try to reclaim leftover capacity.
+    ///
+    /// The strategy is explain at the top of the file.
     #[inline(never)]
     fn reserve_inner(&mut self, additional: usize) {
         let (base_raw, offset) = match shared::as_unpromoted_non_null(self.data) {
@@ -339,9 +458,9 @@ impl BytesMut {
     ///
     /// ```
     /// # use tcio::bytes::BytesMut;
-    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
-    /// bytes.truncate(8);
-    /// assert_eq!(bytes.as_slice(), b"userinfo");
+    /// let mut bytes = BytesMut::copy_from_slice(b"Hello World!");
+    /// bytes.truncate(b"Hello".len());
+    /// assert_eq!(&bytes, b"Hello");
     /// ```
     #[inline]
     pub const fn truncate(&mut self, len: usize) {
@@ -351,26 +470,40 @@ impl BytesMut {
     }
 
     /// Clears the `BytesMut`, removing all bytes.
+    ///
+    /// Note that this method has no effect on the allocated capacity.
     #[inline]
     pub const fn clear(&mut self) {
         self.len = 0;
     }
 
-    /// Removes the bytes from the current view, returning them in a new `BytesMut` handle.
+    /// Removes all bytes, returning them in a new `BytesMut` instance.
     ///
-    /// Afterwards, `self` will be empty, but will retain any additional capacity that it had before
-    /// the operation. This is identical to `self.split_to(self.len())`.
+    /// Returns `BytesMut` containing all bytes. After the call, the original `BytesMut` will be
+    /// empty.
     ///
-    /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
+    /// This is an `O(1)` operation. The returned `BytesMut` share the same allocation, no copy is
+    /// performed.
     ///
     /// # Examples
     ///
     /// ```
     /// # use tcio::bytes::BytesMut;
-    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
+    /// let mut bytes = BytesMut::copy_from_slice(b"Hello World!");
     /// let split = bytes.split();
     /// assert!(bytes.is_empty());
-    /// assert_eq!(&split, &b"userinfo@example.com"[..]);
+    /// assert_eq!(&split, b"Hello World!");
+    /// ```
+    ///
+    /// Excess capacity is preserved.
+    ///
+    /// ```
+    /// # use tcio::bytes::BytesMut;
+    /// let mut bytes = BytesMut::with_capacity(16);
+    /// bytes.extend_from_slice(b"Hello World!");
+    /// let split = bytes.split();
+    /// assert!(bytes.capacity() >= 16 - b"Hello World!".len());
+    /// # drop(split);
     /// ```
     #[inline]
     pub fn split(&mut self) -> Self {
@@ -380,19 +513,20 @@ impl BytesMut {
 
     /// Splits `BytesMut` into two at the given index.
     ///
-    /// Afterwards `self` contains elements `[at, len)`, and the returned `BytesMut` contains
-    /// elements `[0, at)`.
+    /// Returns `BytesMut` containing the bytes in the range `[0, at)`. After the call, the
+    /// original `BytesMut` will be left containing the bytes `[at, len)`.
     ///
-    /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
+    /// This is an `O(1)` operation. The returned `BytesMut` share the same allocation, no copy is
+    /// performed.
     ///
     /// # Examples
     ///
     /// ```
     /// # use tcio::bytes::BytesMut;
-    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
-    /// let split = bytes.split_to(8);
-    /// assert_eq!(&split, &b"userinfo"[..]);
-    /// assert_eq!(&bytes, &b"@example.com"[..]);
+    /// let mut bytes = BytesMut::copy_from_slice(b"Hello World!");
+    /// let split = bytes.split_to(b"Hello ".len());
+    /// assert_eq!(&split, b"Hello ");
+    /// assert_eq!(&bytes, b"World!");
     /// ```
     ///
     /// # Panics
@@ -410,26 +544,22 @@ impl BytesMut {
 
     /// Splits `BytesMut` into two at the given index.
     ///
-    /// Afterwards `self` contains elements `[at, len)`, and the returned `BytesMut` contains
-    /// elements `[0, at)`.
-    ///
-    /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
+    /// Returns `BytesMut` containing the bytes in the range `[0, at)`. After the call, the
+    /// original `BytesMut` will be left containing the bytes `[at, len)`.
     ///
     /// Returns `None` if `at > self.len()`.
+    ///
+    /// This is an `O(1)` operation. The returned `BytesMut` share the same allocation, no copy is
+    /// performed.
     ///
     /// # Examples
     ///
     /// ```
     /// # use tcio::bytes::BytesMut;
-    /// # fn run() -> Option<()> {
-    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
-    /// let split = bytes.try_split_to(8)?;
-    /// assert_eq!(&split, &b"userinfo"[..]);
-    /// assert_eq!(&bytes, &b"@example.com"[..]);
-    /// assert!(bytes.try_split_to(16).is_none());
-    /// # Some(())
-    /// # }
-    /// # assert!(run().is_some());
+    /// let mut bytes = BytesMut::copy_from_slice(b"Hello World!");
+    /// let split = bytes.try_split_to(b"Hello ".len());
+    /// assert_eq!(split.as_deref(), Some(&b"Hello "[..]));
+    /// assert_eq!(&bytes, b"World!");
     /// ```
     #[inline]
     pub fn try_split_to(&mut self, at: usize) -> Option<Self> {
@@ -461,24 +591,25 @@ impl BytesMut {
 
     /// Splits `BytesMut` into two at the given index.
     ///
-    /// Afterwards `self` contains elements `[0, at)`, and the returned `BytesMut` contains
-    /// elements `[at, capacity)`.
+    /// Returns `BytesMut` containing the bytes in the range `[at, len)`. After the call, the
+    /// original `BytesMut` will be left containing the bytes `[0, at)`.
     ///
-    /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
+    /// This is an `O(1)` operation. The returned `BytesMut` share the same allocation, no copy is
+    /// performed.
     ///
     /// # Examples
     ///
     /// ```
     /// # use tcio::bytes::BytesMut;
-    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
-    /// let split = bytes.split_off(8);
-    /// assert_eq!(&bytes, &b"userinfo"[..]);
-    /// assert_eq!(&split, &b"@example.com"[..]);
+    /// let mut bytes = BytesMut::copy_from_slice(b"Hello World!");
+    /// let split_off = bytes.split_off(5);
+    /// assert_eq!(&bytes, b"Hello");
+    /// assert_eq!(&split_off, b" World!");
     /// ```
     ///
     /// # Panics
     ///
-    /// Panics if `at > self.capacity()`.
+    /// Panics if `at > self.len()`.
     #[inline]
     pub fn split_off(&mut self, at: usize) -> Self {
         if at <= self.len {
@@ -491,29 +622,25 @@ impl BytesMut {
 
     /// Splits `BytesMut` into two at the given index.
     ///
-    /// Afterwards `self` contains elements `[0, at)`, and the returned `BytesMut` contains
-    /// elements `[at, capacity)`.
+    /// Returns `BytesMut` containing the bytes in the range `[at, len)`. After the call, the
+    /// original `BytesMut` will be left containing the bytes `[0, at)`.
     ///
-    /// This is an `O(1)` operation that just increases the reference count and sets a few indices.
+    /// Returns `None` if `at > self.len()`.
     ///
-    /// Returns `None` if `at > self.capacity()`.
+    /// This is an `O(1)` operation. The returned `BytesMut` share the same allocation, no copy is
+    /// performed.
     ///
     /// # Examples
     ///
     /// ```
     /// # use tcio::bytes::BytesMut;
-    /// # fn run() -> Option<()> {
-    /// let mut bytes = BytesMut::copy_from_slice(b"userinfo@example.com");
-    /// let split = bytes.try_split_off(8)?;
-    /// assert_eq!(&bytes, &b"userinfo"[..]);
-    /// assert_eq!(&split, &b"@example.com"[..]);
-    /// assert!(bytes.try_split_off(16).is_none());
-    /// # Some(())
-    /// # }
-    /// # assert!(run().is_some());
+    /// let mut bytes = BytesMut::copy_from_slice(b"Hello World!");
+    /// let split_off = bytes.try_split_off(5);
+    /// assert_eq!(&bytes, b"Hello");
+    /// assert_eq!(split_off.as_deref(), Some(&b" World!"[..]));
     /// ```
     #[inline]
-    pub fn try_split_off(&mut self, at: usize) -> Option<BytesMut> {
+    pub fn try_split_off(&mut self, at: usize) -> Option<Self> {
         if at <= self.len {
             // SAFETY: `at <= self.len`
             unsafe { Some(self.split_off_unchecked(at)) }
@@ -581,7 +708,7 @@ impl BytesMut {
     /// * The elements at `old_len..new_len` must be initialized.
     #[inline]
     pub const unsafe fn set_len(&mut self, new_len: usize) {
-        debug_assert!(new_len <= self.cap, "BytesMut::set_len out of bounds");
+        debug_assert!(new_len <= self.cap, "out of bounds");
         self.len = new_len;
     }
 
@@ -591,9 +718,9 @@ impl BytesMut {
     ///
     /// ```
     /// # use tcio::bytes::BytesMut;
-    /// let mut bytes = BytesMut::copy_from_slice(&[1, 2, 3]);
-    /// bytes.extend_from_slice(&[4, 5, 6]);
-    /// assert_eq!(&bytes, &[1, 2, 3, 4, 5, 6])
+    /// let mut bytes = BytesMut::copy_from_slice(b"Hello");
+    /// bytes.extend_from_slice(b" World!");
+    /// assert_eq!(&bytes, b"Hello World!")
     /// ```
     #[inline]
     pub fn extend_from_slice(&mut self, extend: &[u8]) {
@@ -648,9 +775,38 @@ impl BytesMut {
     /// Absorbs a `BytesMut` that was previously split off.
     ///
     /// If the two `BytesMut` were previously contiguous, this is an `O(1)` operation that just
-    /// decrease a reference count, sets few indices and returns [`Ok`].
+    /// reuse allocation, and returns [`Ok`].
     ///
     /// Otherwise, it returns [`Err`] containing the same given `BytesMut`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::BytesMut;
+    /// let mut bytes = BytesMut::copy_from_slice(b"Hello World!");
+    /// let ptr = bytes.as_ptr();
+    /// let mut split = bytes.split_to(6);
+    ///
+    /// assert_eq!(&split, b"Hello ");
+    /// assert_eq!(&bytes, b"World!");
+    ///
+    /// assert_eq!(split.try_unsplit(bytes), Ok(()));
+    /// assert_eq!(&split, &b"Hello World!"[..]);
+    ///
+    /// // no copy or allocation performed
+    /// assert_eq!(split.as_ptr(), ptr);
+    /// ```
+    ///
+    /// Note that the current `BytesMut` must be the one that is "in front".
+    ///
+    /// ```
+    /// # use tcio::bytes::BytesMut;
+    /// let mut bytes = BytesMut::copy_from_slice(b"Hello World!");
+    /// let mut split = bytes.split_off(6);
+    ///
+    /// // `bytes` is the one in front in the buffer
+    /// assert!(split.try_unsplit(bytes).is_err());
+    /// ```
     #[inline]
     pub fn try_unsplit(&mut self, other: BytesMut) -> Result<(), BytesMut> {
         if other.capacity() == 0 {
@@ -672,10 +828,13 @@ impl BytesMut {
     }
 }
 
-// ===== Convertion =====
+// ===== Conversion =====
 
 impl BytesMut {
     /// Converts `self` into an immutable [`Bytes`].
+    ///
+    /// This is an `O(1)` operation. The returned `Bytes` reuse the same allocation, no copy is
+    /// performed.
     #[inline]
     pub fn freeze(self) -> Bytes {
         Bytes::from(self)
