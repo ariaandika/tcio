@@ -1,5 +1,5 @@
 use std::cmp;
-use std::mem::{self, MaybeUninit};
+use std::mem::MaybeUninit;
 use std::ptr::{self, NonNull};
 use std::slice;
 
@@ -373,8 +373,9 @@ impl BytesMut {
     /// assert_eq!(&split, &b"userinfo@example.com"[..]);
     /// ```
     #[inline]
-    pub fn split(&mut self) -> BytesMut {
-        self.split_to(self.len)
+    pub fn split(&mut self) -> Self {
+        // SAFETY: `self.len <= self.len`
+        unsafe { self.split_to_unchecked(self.len) }
     }
 
     /// Splits `BytesMut` into two at the given index.
@@ -398,10 +399,12 @@ impl BytesMut {
     ///
     /// Panics if `at > self.len()`.
     #[inline]
-    pub fn split_to(&mut self, at: usize) -> BytesMut {
-        match self.try_split_to(at) {
-            Some(ok) => ok,
-            None => panic!("split_to out of bounds: {at:?} <= {:?}", self.len),
+    pub fn split_to(&mut self, at: usize) -> Self {
+        if at <= self.len {
+            // SAFETY: `at <= self.len`
+            unsafe { self.split_to_unchecked(at) }
+        } else {
+            split_fail(at, self.len)
         }
     }
 
@@ -429,14 +432,31 @@ impl BytesMut {
     /// # assert!(run().is_some());
     /// ```
     #[inline]
-    pub fn try_split_to(&mut self, at: usize) -> Option<BytesMut> {
-        if at > self.len {
-            return None;
+    pub fn try_split_to(&mut self, at: usize) -> Option<Self> {
+        if at <= self.len {
+            // SAFETY: `at <= self.len`
+            unsafe { Some(self.split_to_unchecked(at)) }
+        } else {
+            None
         }
-        let clone = self.shallow_clone(at);
-        self.len = at;
-        self.cap = at;
-        Some(mem::replace(self, clone))
+    }
+
+    /// # Safety
+    ///
+    /// `at <= self.len`
+    unsafe fn split_to_unchecked(&mut self, at: usize) -> Self {
+        debug_assert!(at <= self.len);
+        self.increment();
+        let ptr = self.ptr;
+        self.ptr = unsafe { ptr.add(at) };
+        self.len -= at;
+        self.cap -= at;
+        Self {
+            ptr,
+            len: at,
+            cap: at,
+            data: self.data,
+        }
     }
 
     /// Splits `BytesMut` into two at the given index.
@@ -460,10 +480,12 @@ impl BytesMut {
     ///
     /// Panics if `at > self.capacity()`.
     #[inline]
-    pub fn split_off(&mut self, at: usize) -> BytesMut {
-        match self.try_split_off(at) {
-            Some(ok) => ok,
-            None => panic!("split_off out of bounds: {at:?} <= {:?}", self.len),
+    pub fn split_off(&mut self, at: usize) -> Self {
+        if at <= self.len {
+            // SAFETY: `at <= self.len`
+            unsafe { self.split_off_unchecked(at) }
+        } else {
+            split_fail(at, self.len)
         }
     }
 
@@ -492,13 +514,29 @@ impl BytesMut {
     /// ```
     #[inline]
     pub fn try_split_off(&mut self, at: usize) -> Option<BytesMut> {
-        if at > self.cap {
-            return None;
+        if at <= self.len {
+            // SAFETY: `at <= self.len`
+            unsafe { Some(self.split_off_unchecked(at)) }
+        } else {
+            None
         }
-        let clone = self.shallow_clone(at);
+    }
+
+    /// # Safety
+    ///
+    /// `at <= self.len`
+    unsafe fn split_off_unchecked(&mut self, at: usize) -> Self {
+        debug_assert!(at <= self.len);
+        self.increment();
+        let Self { len, cap, .. } = *self;
+        self.len = at;
         self.cap = at;
-        self.len = cmp::min(self.len, at); // could split pass `self.len`
-        Some(clone)
+        Self {
+            ptr: unsafe { self.ptr.add(at) },
+            len: len - at,
+            cap: cap - at,
+            data: self.data,
+        }
     }
 
     /// # Safety
@@ -524,16 +562,10 @@ impl BytesMut {
         self.cap -= count;
     }
 
-    fn shallow_clone(&mut self, at: usize) -> Self {
+    fn increment(&mut self) {
         match shared::as_unpromoted_non_null(self.data) {
             Ok(offset) => self.data = shared::promote_with(self.ptr, self.cap, offset, 2),
             Err(shared) => shared::increment(shared),
-        }
-        Self {
-            ptr: unsafe { self.ptr.add(at) },
-            len: self.len - at,
-            cap: self.cap - at,
-            data: self.data,
         }
     }
 }
@@ -872,4 +904,15 @@ impl std::io::Write for BytesMut {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
+}
+
+// ===== panics =====
+
+// The panic code path was put into a cold function to not bloat the call site.
+
+#[cfg_attr(not(panic = "immediate-abort"), inline(never), cold)]
+#[cfg_attr(panic = "immediate-abort", inline)]
+#[track_caller]
+fn split_fail(at: usize, len: usize) -> ! {
+    panic!("split out of bounds: at({at}) > self.len({len})")
 }
