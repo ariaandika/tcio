@@ -260,47 +260,10 @@ impl Bytes {
         self.len = len;
     }
 
-    /// Shortens the buffer, dropping the last `off` bytes and keeping the rest.
-    ///
-    /// If `off` is greater to the `Bytes` length, this has no effect.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use tcio::bytes::Bytes;
-    /// let mut bytes = Bytes::copy_from_slice(b"Hello World!");
-    /// bytes.truncate_off(7);
-    /// assert_eq!(&bytes, &b"Hello"[..]);
-    /// ```
-    #[inline]
-    pub fn truncate_off(&mut self, off: usize) {
-        let Some(new_len) = self.len.checked_sub(off) else {
-            return;
-        };
-        self.truncate(new_len);
-    }
-
     /// Clears the buffer, removing all values.
     #[inline]
     pub fn clear(&mut self) {
         *self = Self::new_empty_with_ptr(self.ptr);
-    }
-
-    /// Advance [`Bytes`] `cnt`-nth bytes.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # use tcio::bytes::Bytes;
-    /// let mut bytes = Bytes::copy_from_slice(b"Hello World!");
-    /// bytes.advance(6);
-    /// assert_eq!(&bytes, &b"World!"[..]);
-    /// ```
-    #[inline]
-    pub fn advance(&mut self, cnt: usize) {
-        assert!(cnt <= self.len, "out of bounds");
-        // SAFETY: cnt <= self.len
-        unsafe { self.advance_unchecked(cnt) };
     }
 
     pub(crate) unsafe fn advance_unchecked(&mut self, count: usize) {
@@ -755,7 +718,7 @@ impl std::io::Read for Bytes {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let read = buf.len().min(self.len());
         buf[..read].copy_from_slice(&self[..read]);
-        self.advance(read);
+        super::Buf::advance(self, read);
         Ok(read)
     }
 }

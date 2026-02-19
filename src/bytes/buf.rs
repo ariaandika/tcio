@@ -353,7 +353,9 @@ impl Buf for Bytes {
 
     #[inline]
     fn advance(&mut self, cnt: usize) {
-        Self::advance(self, cnt);
+        assert!(cnt <= self.len(), "out of bounds");
+        // SAFETY: cnt <= self.len
+        unsafe { self.advance_unchecked(cnt) };
     }
 
     // skip default implementation that anticipate for non-contiguous bytes

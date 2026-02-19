@@ -1,4 +1,4 @@
-use crate::bytes::{Bytes, BytesMut};
+use crate::bytes::{Buf, Bytes, BytesMut};
 
 const DATA: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 
@@ -56,7 +56,7 @@ fn advancing((mut bytes, expect): Cx) -> Cx {
 }
 
 fn truncating((mut bytes, expect): Cx) -> Cx {
-    bytes.truncate_off(2);
+    bytes.truncate(bytes.len() - 2);
     assert_eq!(bytes.as_slice(), &expect[..expect.len() - 2]);
     (bytes, &expect[..expect.len() - 2])
 }
