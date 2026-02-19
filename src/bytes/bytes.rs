@@ -143,48 +143,78 @@ impl Bytes {
     ///
     /// `range` should be in bounds of bytes length, otherwise panic.
     pub fn slice(&self, range: impl core::ops::RangeBounds<usize>) -> Self {
-        self.try_slice_bound(range.start_bound(), range.end_bound()).expect("out of bounds")
+        use core::ops::Bound;
+        let start = match range.start_bound() {
+            Bound::Included(&n) => n,
+            Bound::Excluded(&n) => n.strict_add(1),
+            Bound::Unbounded => 0,
+        };
+        let end = match range.end_bound() {
+            Bound::Included(&n) => n.strict_add(1),
+            Bound::Excluded(&n) => n,
+            Bound::Unbounded => self.len,
+        };
+        self.slice_inner(start, end).expect("out of bounds")
     }
 
-    fn try_slice_bound(
-        &self,
-        start_bound: core::ops::Bound<&usize>,
-        end_bound: core::ops::Bound<&usize>,
-    ) -> Option<Self> {
+    /// Returns the shared subset of `Bytes` with given range.
+    ///
+    /// Returns `None` if `range` is out of bounds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use tcio::bytes::Bytes;
+    /// let bytes = Bytes::copy_from_slice(b"Hello World!");
+    /// let slice = bytes.try_slice(6..);
+    /// assert_eq!(&slice, &b"World!"[..]);
+    ///
+    /// let slice = bytes.try_slice(32..);
+    /// assert!(slice.is_none());
+    /// ```
+    pub fn try_slice(&self, range: impl core::ops::RangeBounds<usize>) -> Option<Self> {
         use core::ops::Bound;
-        let begin = match start_bound {
+        let start = match range.start_bound() {
             Bound::Included(&n) => n,
             Bound::Excluded(&n) => n.checked_add(1)?,
             Bound::Unbounded => 0,
         };
-        let end = match end_bound {
+        let end = match range.end_bound() {
             Bound::Included(&n) => n.checked_add(1)?,
             Bound::Excluded(&n) => n,
             Bound::Unbounded => self.len,
         };
-        if end > self.len {
-            return None;
+        self.slice_inner(start, end)
+    }
+
+    /// Returns the shared subset of `Bytes` with given range.
+    ///
+    /// # Safety
+    ///
+    /// `range` should be in bounds of bytes length.
+    pub unsafe fn slice_unchecked(&self, range: impl core::ops::RangeBounds<usize>) -> Self {
+        use core::ops::Bound;
+        let start = match range.start_bound() {
+            Bound::Included(&n) => n,
+            Bound::Excluded(&n) => n.strict_add(1),
+            Bound::Unbounded => 0,
+        };
+        let end = match range.end_bound() {
+            Bound::Included(&n) => n.strict_add(1),
+            Bound::Excluded(&n) => n,
+            Bound::Unbounded => self.len,
+        };
+        debug_assert!(start <= end);
+        debug_assert!(end <= self.len);
+        // SAFETY: guarantee by the caller
+        let ptr = unsafe { self.ptr.add(start) };
+        let len = end - start;
+        let data = self.increment();
+        Self {
+            ptr,
+            len,
+            data: AtomicPtr::new(data),
         }
-        let len = end.checked_sub(begin)?;
-        // SAFETY:
-        // 1. `end <= self.len`,
-        // 2. `begin <= end <= self.len`
-        // 3. `len <= end <= self.len`
-        // 4. `self.ptr` is valid until `self.len` forward
-        // 5. with `begin <= self.len`, then `self.ptr.add(begin)` is in bounds
-        // 6. with `end <= self.len`, then `self.ptr.add(end) <= self.ptr.add(self.len)`
-        // 7. with `len <= end`, then len` correctly represent offset from
-        //    `self.ptr.add(begin)` to `self.ptr.add(end)`
-        //
-        // then `self.ptr.add(begin)` valid until `len` forward
-        let ptr = unsafe { self.ptr.add(begin) };
-        if len == 0 {
-            return Some(Bytes::empty(ptr));
-        }
-        let mut cloned = self.clone();
-        cloned.ptr = ptr;
-        cloned.len = len;
-        Some(cloned)
     }
 
     /// Returns the shared subset of `Bytes` with given slice.
@@ -211,7 +241,7 @@ impl Bytes {
         }
 
         if subset.is_empty() {
-            return Self::empty(self.ptr);
+            return Self::empty(NonNull::new(subset.as_ptr().cast_mut()).expect("ref cannot be null"));
         }
 
         let self_addr = self.ptr.addr().get();
@@ -226,11 +256,44 @@ impl Bytes {
             slice_failed();
         };
 
-        let mut cloned = self.clone();
-        // SAFETY: given slice is subset of self
-        cloned.ptr = unsafe { self.ptr.add(offset) };
-        cloned.len = subset.len();
-        cloned
+        // SAFETY: checked that given slice is subset of self
+        let ptr = unsafe { self.ptr.add(offset) };
+        let len = subset.len();
+        let data = self.increment();
+        Self {
+            ptr,
+            len,
+            data: AtomicPtr::new(data),
+        }
+    }
+
+    fn slice_inner(&self, start: usize, end: usize) -> Option<Self> {
+        if end > self.len {
+            return None;
+        }
+        let len = end.checked_sub(start)?;
+        // SAFETY:
+        // 1. `end <= self.len`,
+        // 2. `start <= end <= self.len`
+        // 3. `len <= end <= self.len`
+        // 4. `self.ptr` is valid until `self.len` forward
+        // 5. with `start <= self.len`, then `self.ptr.add(start)` is in bounds
+        // 6. with `end <= self.len`, then `self.ptr.add(end) <= self.ptr.add(self.len)`
+        // 7. with `len <= end`, then len` correctly represent offset from
+        //    `self.ptr.add(start)` to `self.ptr.add(end)`
+        //
+        // then `self.ptr.add(start)` valid until `len` forward
+        let ptr = unsafe { self.ptr.add(start) };
+        if len == 0 {
+            return Some(Bytes::empty(ptr));
+        }
+
+        let data = self.increment();
+        Some(Self {
+            ptr,
+            len,
+            data: AtomicPtr::new(data),
+        })
     }
 
     /// Shortens the buffer, keeping the first `len` bytes and dropping the rest.
@@ -476,18 +539,20 @@ impl Bytes {
         }
     }
 
-    fn increment(&self) {
-        let Some(shared) = NonNull::new(self.data.load(Ordering::Relaxed)) else {
-            return;
+    fn increment(&self) -> *mut Shared {
+        let data = self.data.load(Ordering::Relaxed);
+        let Some(shared) = NonNull::new(data) else {
+            return data;
         };
         match shared::as_unpromoted_non_null(shared) {
             Ok(offset) => promote_ref(self, offset, shared),
             Err(shared_ref) => shared::increment(shared_ref),
         }
+        data
     }
 
     fn increment_mut(&mut self) {
-        let Some(shared) = NonNull::new(self.data.load(Ordering::Relaxed)) else {
+        let Some(shared) = NonNull::new(*self.data.get_mut()) else {
             return;
         };
         match shared::as_unpromoted_non_null(shared) {
