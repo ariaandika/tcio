@@ -355,8 +355,14 @@ impl BytesMut {
             return;
         }
         if self.cap - self.len < additional {
-            self.reserve_inner(additional);
+            self.reserve_inner(std::num::NonZeroUsize::new(additional));
         }
+    }
+
+    /// Try to reclaim leftover capacity without allocating.
+    #[inline]
+    pub fn reclaim(&mut self) {
+        self.reserve_inner(None);
     }
 
     /// Separate allocation call to allow `reserve` te be inlined
@@ -365,7 +371,7 @@ impl BytesMut {
     ///
     /// The strategy is explain at the top of the file.
     #[inline(never)]
-    fn reserve_inner(&mut self, additional: usize) {
+    fn reserve_inner(&mut self, additional: Option<std::num::NonZeroUsize>) {
         let (base_raw, offset) = match shared::as_unpromoted_non_null(self.data) {
             Ok(offset) => (
                 Some((unsafe { self.ptr.sub(offset) }, self.cap + offset)),
@@ -401,6 +407,10 @@ impl BytesMut {
             offset
         };
 
+        let Some(add) = additional else {
+            return;
+        };
+        let additional = add.get();
         if self.cap - self.len >= additional {
             // enough capacity without reallocating
             return;
