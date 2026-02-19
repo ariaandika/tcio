@@ -15,7 +15,7 @@ pub struct Bytes {
     ///
     /// 1. null, static value
     /// 2. 0x__1, `data as usize >> 1` = offset from base ptr
-    /// 3. 0x_00, NonNull<Shared>
+    /// 3. 0x_00, `NonNull<Shared>`
     data: AtomicPtr<Shared>,
 }
 
@@ -65,7 +65,7 @@ impl Bytes {
     #[inline]
     pub fn copy_from_slice(slice: &[u8]) -> Self {
         if slice.is_empty() {
-            return Self::new_empty_with_ptr(
+            return Self::empty(
                 NonNull::new(slice.as_ptr().cast_mut()).expect("reference cannot be null"),
             );
         }
@@ -80,7 +80,7 @@ impl Bytes {
     ///
     /// This is used when split and resulting in empty `Bytes` that does not need to increment the
     /// atomic counter.
-    fn new_empty_with_ptr(ptr: NonNull<u8>) -> Self {
+    fn empty(ptr: NonNull<u8>) -> Self {
         Self {
             ptr,
             len: 0,
@@ -179,7 +179,7 @@ impl Bytes {
         // then `self.ptr.add(begin)` valid until `len` forward
         let ptr = unsafe { self.ptr.add(begin) };
         if len == 0 {
-            return Some(Bytes::new_empty_with_ptr(ptr));
+            return Some(Bytes::empty(ptr));
         }
         let mut cloned = self.clone();
         cloned.ptr = ptr;
@@ -211,7 +211,7 @@ impl Bytes {
         }
 
         if subset.is_empty() {
-            return Self::new_empty_with_ptr(self.ptr);
+            return Self::empty(self.ptr);
         }
 
         let self_addr = self.ptr.addr().get();
@@ -253,8 +253,7 @@ impl Bytes {
         // this introduce "tail offset",
         // which cannot be represented in unpromoted,
         // thus required to be promoted
-        let data = *self.data.get_mut();
-        if let Some(offset) = shared::as_unpromoted(data) {
+        if let Some(offset) = shared::as_unpromoted(*self.data.get_mut()) {
             *self.data.get_mut() = shared::promote_with(self.ptr, self.len, offset, 1).as_ptr();
         }
         self.len = len;
@@ -263,7 +262,7 @@ impl Bytes {
     /// Clears the buffer, removing all values.
     #[inline]
     pub fn clear(&mut self) {
-        *self = Self::new_empty_with_ptr(self.ptr);
+        *self = Self::empty(self.ptr);
     }
 
     pub(crate) unsafe fn advance_unchecked(&mut self, count: usize) {
@@ -276,7 +275,6 @@ impl Bytes {
 
         let data = *self.data.get_mut();
         if let Some(offset) = shared::as_unpromoted(data) {
-            // SAFETY: `data` is unpromoted
             *self.data.get_mut() = shared::mask_payload(data, offset + count).as_ptr();
         }
 
@@ -312,9 +310,11 @@ impl Bytes {
     /// Panics if `at > self.len()`.
     #[inline]
     pub fn split_off(&mut self, at: usize) -> Self {
-        match self.try_split_off(at) {
-            Some(ok) => ok,
-            None => panic!("split_off out of bounds: {at:?} <= {:?}", self.len()),
+        if at <= self.len {
+            // SAFETY: `at <= self.len`
+            unsafe { self.split_off_unchecked(at) }
+        } else {
+            split_fail(at, self.len)
         }
     }
 
@@ -343,21 +343,34 @@ impl Bytes {
     /// ```
     #[inline]
     pub fn try_split_off(&mut self, at: usize) -> Option<Self> {
+        if at <= self.len {
+            // SAFETY: `at < self.len`
+            unsafe { Some(self.split_off_unchecked(at)) }
+        } else {
+            None
+        }
+    }
+
+    /// # Safety
+    ///
+    /// `at <= self.len`
+    unsafe fn split_off_unchecked(&mut self, at: usize) -> Self {
         if at == 0 {
-            return Some(mem::replace(self, Bytes::new_empty_with_ptr(self.ptr)));
+            return mem::replace(self, Self::empty(self.ptr));
         }
         if at == self.len {
             // SAFETY: `self.ptr.add(self.len)` is always valid
-            return Some(Bytes::new_empty_with_ptr(unsafe { self.ptr.add(self.len) }));
+            return Self::empty(unsafe { self.ptr.add(self.len) });
         }
-        self.split_off_inner(at)
-    }
-
-    fn split_off_inner(&mut self, at: usize) -> Option<Bytes> {
-        let remain_len = self.len.checked_sub(at)?;
-        let cloned = self.clone_mut(unsafe { self.ptr.add(at) }, remain_len);
+        debug_assert!(at <= self.len);
+        self.increment_mut();
+        let len = self.len;
         self.len = at;
-        Some(cloned)
+        Self {
+            ptr: unsafe { self.ptr.add(at) },
+            len: len - at,
+            data: AtomicPtr::new(*self.data.get_mut()),
+        }
     }
 
     /// Splits `Bytes` into two at the given index.
@@ -382,9 +395,11 @@ impl Bytes {
     /// Panics if `at > self.len()`.
     #[inline]
     pub fn split_to(&mut self, at: usize) -> Self {
-        match self.try_split_to(at) {
-            Some(ok) => ok,
-            None => panic!("split_to out of bounds: {at:?} <= {:?}", self.len()),
+        if at <= self.len {
+            // SAFETY: `at <= self.len`
+            unsafe { self.split_to_unchecked(at) }
+        } else {
+            split_fail(at, self.len)
         }
     }
 
@@ -413,41 +428,38 @@ impl Bytes {
     /// ```
     #[inline]
     pub fn try_split_to(&mut self, at: usize) -> Option<Self> {
+        if at <= self.len {
+            // SAFETY: `at <= self.len`
+            unsafe { Some(self.split_to_unchecked(at)) }
+        } else {
+            None
+        }
+    }
+
+    /// # Safety
+    ///
+    /// `at <= self.len`
+    unsafe fn split_to_unchecked(&mut self, at: usize) -> Self {
         if at == 0 {
-            return Some(Bytes::new_empty_with_ptr(self.ptr));
+            return Self::empty(self.ptr);
         }
         if at == self.len {
-            let empty = Bytes::new_empty_with_ptr(unsafe { self.ptr.add(self.len) });
-            return Some(mem::replace(self, empty));
+            return mem::replace(self, Self::empty(self.ptr));
         }
-        match self.split_off_inner(at) {
-            Some(ok) => Some(mem::replace(self, ok)),
-            None => None,
+        debug_assert!(at <= self.len);
+        self.increment_mut();
+        let ptr = self.ptr;
+        self.ptr = unsafe { ptr.add(at) };
+        self.len -= at;
+        Self {
+            ptr,
+            len: at,
+            data: AtomicPtr::new(*self.data.get_mut()),
         }
     }
 }
 
 // ===== Atomic Operations =====
-
-impl Clone for Bytes {
-    #[inline]
-    fn clone(&self) -> Self {
-        let Some(shared) = NonNull::new(self.data.load(Ordering::Relaxed)) else {
-            return Self {
-                ptr: self.ptr,
-                len: self.len,
-                data: AtomicPtr::new(std::ptr::null_mut()),
-            };
-        };
-        match shared::as_unpromoted_non_null(shared) {
-            Ok(offset) => promote_ref(self, offset, shared),
-            Err(shared_ref) => {
-                shared::increment(shared_ref);
-                unsafe { ptr::read(self) }
-            }
-        }
-    }
-}
 
 impl Bytes {
     /// Returns `true` if `Bytes` is the only handle in a shared buffer.
@@ -464,32 +476,40 @@ impl Bytes {
         }
     }
 
-    /// Like `clone`, but because it have exclusive `&mut self`, promotion guaranteed to be
-    /// exclusive and skip atomic operation.
-    fn clone_mut(&mut self, ptr: NonNull<u8>, len: usize) -> Self {
+    fn increment(&self) {
         let Some(shared) = NonNull::new(self.data.load(Ordering::Relaxed)) else {
-            let data = AtomicPtr::new(std::ptr::null_mut());
-            return Self { ptr, len, data };
+            return;
         };
         match shared::as_unpromoted_non_null(shared) {
+            Ok(offset) => promote_ref(self, offset, shared),
+            Err(shared_ref) => shared::increment(shared_ref),
+        }
+    }
+
+    fn increment_mut(&mut self) {
+        let Some(shared) = NonNull::new(self.data.load(Ordering::Relaxed)) else {
+            return;
+        };
+        match shared::as_unpromoted_non_null(shared) {
+            // in contrast with `increment()`, exclusive `&mut self` guarantee no promotion can
+            // happen concurrently
             Ok(offset) => {
-                let new_shared = shared::promote_with(self.ptr, self.len, offset, 2).as_ptr();
-                // in contrast with `clone`, we have exclusive `&mut self` thus no promotion can
-                // happen concurrently
-                *self.data.get_mut() = new_shared;
-                let data = AtomicPtr::new(new_shared);
-                Self { ptr, len, data }
+                *self.data.get_mut() = shared::promote_with(self.ptr, self.len, offset, 2).as_ptr();
             }
-            Err(shared_ref) => {
-                shared::increment(shared_ref);
-                let data = AtomicPtr::new(shared.as_ptr());
-                Self { ptr, len, data }
-            }
+            Err(shared_ref) => shared::increment(shared_ref),
         }
     }
 }
 
-// ===== Convertion =====
+impl Clone for Bytes {
+    #[inline]
+    fn clone(&self) -> Self {
+        self.increment();
+        unsafe { ptr::read(self) }
+    }
+}
+
+// ===== Conversion =====
 
 impl Bytes {
     pub(super) fn into_raw_parts(self) -> (NonNull<u8>, usize, *mut Shared) {
@@ -514,7 +534,7 @@ impl From<Box<[u8]>> for Bytes {
         let len = value.len();
         let ptr = NonNull::new(Box::into_raw(value).cast()).expect("box cannot be null");
         if len == 0 {
-            Self::new_empty_with_ptr(ptr)
+            Self::empty(ptr)
         } else {
             let data = AtomicPtr::new(shared::NEW_UNPROMOTED.as_ptr());
             Self { ptr, len, data }
@@ -528,7 +548,7 @@ impl From<Vec<u8>> for Bytes {
         let (ptr, len, cap) = vec.into_raw_parts();
         let ptr = NonNull::new(ptr).expect("vec cannot be null");
         if len == 0 {
-            Self::new_empty_with_ptr(ptr)
+            Self::empty(ptr)
         } else if len == cap {
             // this is the ideal form, `len` and `cap` can be stored in single field
             let data = AtomicPtr::new(shared::NEW_UNPROMOTED.as_ptr());
@@ -554,7 +574,7 @@ impl From<BytesMut> for Bytes {
     fn from(value: BytesMut) -> Self {
         let (ptr, len, cap, data) = value.into_raw_parts();
         if len == 0 {
-            Self::new_empty_with_ptr(ptr)
+            Self::empty(ptr)
         } else if let Some(offset) = shared::as_unpromoted(data.as_ptr()) {
             // same procedure as `From<Vec<u8>>`
             if len == cap {
@@ -622,7 +642,7 @@ impl From<Bytes> for Vec<u8> {
 // implementation
 #[inline(never)]
 #[cold]
-fn promote_ref(me: &Bytes, offset: usize, shared: NonNull<Shared>) -> Bytes {
+fn promote_ref(me: &Bytes, offset: usize, shared: NonNull<Shared>) {
     let new_shared = shared::promote_with(me.ptr, me.len, offset, 2);
 
     // because cloning is called via the `Clone` trait, which take `&self`, and `Bytes`
@@ -633,34 +653,20 @@ fn promote_ref(me: &Bytes, offset: usize, shared: NonNull<Shared>) -> Bytes {
         Ordering::AcqRel,
         Ordering::Acquire,
     ) {
-        Ok(old_shared) => {
+        Ok(_old_shared) => {
             // the returned pointer is the old pointer
-            debug_assert!(std::ptr::eq(old_shared, shared.as_ptr()));
-            debug_assert!(!std::ptr::eq(old_shared, new_shared.as_ptr()));
-
-            Bytes {
-                ptr: me.ptr,
-                len: me.len,
-                data: AtomicPtr::new(new_shared.as_ptr()),
-            }
+            debug_assert!(std::ptr::eq(_old_shared, shared.as_ptr()));
+            debug_assert!(!std::ptr::eq(_old_shared, new_shared.as_ptr()));
         }
         Err(promoted_shared) => {
             // concurrent promotion happens during heap allocation
             debug_assert!(!std::ptr::eq(new_shared.as_ptr(), promoted_shared));
             // the written pointer should have been promoted
             debug_assert!(shared::is_promoted(promoted_shared));
-
             // release the heap that failed the promotion
             shared::release(new_shared);
-
-            // increase the shared reference
+            // increase the reference counter
             unsafe { shared::increment(&*promoted_shared) };
-
-            Bytes {
-                ptr: me.ptr,
-                len: me.len,
-                data: AtomicPtr::new(promoted_shared),
-            }
         }
     }
 }
@@ -721,4 +727,15 @@ impl std::io::Read for Bytes {
         super::Buf::advance(self, read);
         Ok(read)
     }
+}
+
+// ===== panics =====
+
+// The panic code path was put into a cold function to not bloat the call site.
+
+#[cfg_attr(not(panic = "immediate-abort"), inline(never), cold)]
+#[cfg_attr(panic = "immediate-abort", inline)]
+#[track_caller]
+fn split_fail(at: usize, len: usize) -> ! {
+    panic!("split out of bounds: at({at}) > self.len({len})")
 }
