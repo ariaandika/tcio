@@ -546,9 +546,11 @@ impl Bytes {
         };
         match shared::as_unpromoted_non_null(shared) {
             Ok(offset) => promote_ref(self, offset, shared),
-            Err(shared_ref) => shared::increment(shared_ref),
+            Err(shared_ref) => {
+                shared::increment(shared_ref);
+                data
+            },
         }
-        data
     }
 
     fn increment_mut(&mut self) {
@@ -707,7 +709,7 @@ impl From<Bytes> for Vec<u8> {
 // implementation
 #[inline(never)]
 #[cold]
-fn promote_ref(me: &Bytes, offset: usize, shared: NonNull<Shared>) {
+fn promote_ref(me: &Bytes, offset: usize, shared: NonNull<Shared>) -> *mut Shared {
     let new_shared = shared::promote_with(me.ptr, me.len, offset, 2);
 
     // because cloning is called via the `Clone` trait, which take `&self`, and `Bytes`
@@ -722,6 +724,7 @@ fn promote_ref(me: &Bytes, offset: usize, shared: NonNull<Shared>) {
             // the returned pointer is the old pointer
             debug_assert!(std::ptr::eq(_old_shared, shared.as_ptr()));
             debug_assert!(!std::ptr::eq(_old_shared, new_shared.as_ptr()));
+            new_shared.as_ptr()
         }
         Err(promoted_shared) => {
             // concurrent promotion happens during heap allocation
@@ -732,6 +735,8 @@ fn promote_ref(me: &Bytes, offset: usize, shared: NonNull<Shared>) {
             shared::release(new_shared);
             // increase the reference counter
             unsafe { shared::increment(&*promoted_shared) };
+
+            promoted_shared
         }
     }
 }
