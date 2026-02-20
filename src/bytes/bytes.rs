@@ -167,7 +167,7 @@ impl Bytes {
     /// # use tcio::bytes::Bytes;
     /// let bytes = Bytes::copy_from_slice(b"Hello World!");
     /// let slice = bytes.try_slice(6..);
-    /// assert_eq!(&slice, &b"World!"[..]);
+    /// assert_eq!(slice.as_deref(), Some(&b"World!"[..]));
     ///
     /// let slice = bytes.try_slice(32..);
     /// assert!(slice.is_none());
