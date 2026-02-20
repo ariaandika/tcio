@@ -67,6 +67,97 @@ pub fn atoi(bytes: &[u8]) -> Option<i64> {
         })
 }
 
+/// Write unsigned integer as ASCII.
+///
+/// This functions creates the buffer, use [`format`] to write the integer.
+///
+/// [`format`]: ItoaBuffer::format
+///
+/// # Examples
+///
+/// ```
+/// use tcio::num::itoa;
+///
+/// assert_eq!(itoa().format(123), "123");
+/// ```
+#[inline]
+pub const fn itoa() -> ItoaBuffer {
+    ItoaBuffer {
+        buf: [std::mem::MaybeUninit::uninit(); U64_MAX_CH],
+    }
+}
+
+/// [`itoa`] buffer.
+///
+/// Use [`format`] to write the integer.
+///
+/// [`format`]: ItoaBuffer::format
+#[derive(Debug)]
+pub struct ItoaBuffer {
+    buf: [std::mem::MaybeUninit<u8>; U64_MAX_CH],
+}
+
+const TABLE_PTR: *const u8 = DIGIT2_TABLE.as_ptr();
+const DIGIT2_TABLE: [u8; 200] = *b"\
+      0001020304050607080910111213141516171819\
+      2021222324252627282930313233343536373839\
+      4041424344454647484950515253545556575859\
+      6061626364656667686970717273747576777879\
+      8081828384858687888990919293949596979899";
+
+impl ItoaBuffer {
+    /// Write the integer, returns the written buffer.
+    // Adaptation of the original implementation at
+    // https://github.com/rust-lang/rust/blob/b8214dc6c6fc20d0a660fb5700dca9ebf51ebe89/src/libcore/fmt/num.rs#L188-L266
+    pub fn format(&mut self, mut n: u64) -> &str {
+        use std::ptr::copy_nonoverlapping;
+        use std::slice::from_raw_parts;
+
+        let mut idx = self.buf.len();
+        let ptr = self.buf.as_mut_ptr() as *mut u8;
+
+        // render 4 digits at a time
+        while n >= 10000 {
+            let rem = n % 10000;
+            n /= 10000;
+
+            let d1 = ((rem / 100) << 1) as usize;
+            let d2 = ((rem % 100) << 1) as usize;
+            idx -= 4;
+            unsafe {
+                copy_nonoverlapping(TABLE_PTR.add(d1), ptr.add(idx), 2);
+                copy_nonoverlapping(TABLE_PTR.add(d2), ptr.add(idx + 2), 2);
+            }
+        }
+
+        // render 2 more digits, if >2 digits
+        if n >= 100 {
+            let d1 = ((n % 100) << 1) as usize;
+            n /= 100;
+            idx -= 2;
+            unsafe { copy_nonoverlapping(TABLE_PTR.add(d1), ptr.add(idx), 2) };
+        }
+
+        if n < 10 {
+            // render last 1 digits.
+            idx -= 1;
+            unsafe { *ptr.add(idx) = (n as u8) + b'0' };
+        } else {
+            // render last 2 digits.
+            let d1 = (n << 1) as usize;
+            idx -= 2;
+            unsafe { copy_nonoverlapping(TABLE_PTR.add(d1), ptr.add(idx), 2) };
+        }
+
+        let len = self.buf.len() - idx;
+        let string = unsafe { str::from_utf8_unchecked(from_raw_parts(ptr.add(idx), len)) };
+
+        unsafe { std::hint::assert_unchecked(string.len() <= U64_MAX_CH) };
+
+        string
+    }
+}
+
 #[test]
 fn test_atou() {
     assert_eq!(Some(0), atou(b"0"));
@@ -161,4 +252,18 @@ fn test_atoi() {
     assert!(atoi(b"9224372036854775807").is_none());
     assert!(atoi(b"9223472036854775807").is_none());
     assert!(atoi(b"9223382036854775807").is_none());
+}
+
+#[test]
+fn test_itoa() {
+    macro_rules! test {
+        ($d:literal, $expect:literal) => {
+            assert_eq!(itoa().format($d), $expect);
+        };
+    }
+    test!(0, "0");
+    test!(1, "1");
+    test!(255, "255");
+    test!(1024, "1024");
+    test!(999999999999999999, "999999999999999999");
 }
