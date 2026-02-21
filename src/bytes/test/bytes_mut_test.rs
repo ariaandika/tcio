@@ -73,42 +73,53 @@ fn splitting_to((mut bytes, expect): Cx) -> Cx {
 // ===== Test =====
 
 macro_rules! behavior {
-    (@G $t:ident; $u:ident; $c:ident,$d:ident) => {
-        $d($u($t($c())));
+    (@G1 $b1:ident; $c:ident,$d:ident) => {
+        $d($b1($c()));
+    };
+    (@G2 $b1:ident; $b2:ident; $c:ident,$d:ident) => {
+        $d($b2($b1($c())));
     };
 
-    (@C
-     $t1:ident; $u1:ident; $($all:ident),*;
-     $c:ident,$d:ident
-    ) => {
-        behavior!(@G $t1; $u1; $c,$d);
+    (@B1 $b1:ident; $c:ident,$d:ident) => {
+        behavior!(@G1 $b1; $c,$d);
     };
-    (@C
-     $t1:ident; $u1:ident, $($u2:ident),*; $($all:ident),*;
-     $c:ident,$d:ident
-    ) => {
-        behavior!(@G $t1; $u1; $c,$d);
-        behavior!(@C $t1; $($u2),*; $($all),*; $c,$d);
-    };
-    (@C
-     $t1:ident, $($t2:ident),*; $u1:ident; $($all:ident),*;
-     $c:ident,$d:ident
-    ) => {
-        behavior!(@G $t1; $u1; $c,$d);
-        behavior!(@C $($t2),*; $($all),*; $($all),*; $c,$d);
-    };
-    (@C
-     $t1:ident, $($t2:ident),*; $u1:ident, $($u2:ident),*; $($all:ident),*;
-     $c:ident,$d:ident
-    ) => {
-        behavior!(@G $t1; $u1; $c,$d);
-        behavior!(@C $t1, $($t2),*; $($u2),*; $($all),*; $c,$d);
+    (@B1 $b1:ident, $($br1:ident),*; $c:ident,$d:ident) => {
+        behavior!(@G1 $b1; $c,$d);
+        behavior!(@B1 $($br1),*; $c,$d);
     };
 
-    ($($t:ident),*; $c:ident,$d:ident) => {
-        behavior!(@C $($t),*;$($t),*;$($t),*; $c,$d);
+    (@B2
+     $b1:ident; $b2:ident; $($all:ident),*;
+     $c:ident,$d:ident
+    ) => {
+        behavior!(@G2 $b1; $b2; $c,$d);
+    };
+    (@B2
+     $b1:ident; $b2:ident, $($br2:ident),*; $($all:ident),*;
+     $c:ident,$d:ident
+    ) => {
+        behavior!(@G2 $b1; $b2; $c,$d);
+        behavior!(@B2 $b1; $($br2),*; $($all),*; $c,$d);
+    };
+    (@B2
+     $b1:ident, $($br1:ident),*; $b2:ident; $($all:ident),*;
+     $c:ident,$d:ident
+    ) => {
+        behavior!(@G2 $b1; $b2; $c,$d);
+        behavior!(@B2 $($br1),*; $($all),*; $($all),*; $c,$d);
+    };
+    (@B2
+     $b1:ident, $($br1:ident),*; $b2:ident, $($br2:ident),*; $($all:ident),*;
+     $c:ident,$d:ident
+    ) => {
+        behavior!(@G2 $b1; $b2; $c,$d);
+        behavior!(@B2 $b1, $($br1),*; $($br2),*; $($all),*; $c,$d);
     };
 
+    ($($b:ident),*; $c:ident,$d:ident) => {
+        behavior!(@B1 $($b),*; $c,$d);
+        behavior!(@B2 $($b),*;$($b),*;$($b),*; $c,$d);
+    };
     ($ctor:ident, $dtor:ident) => {
         behavior!(
             advancing, truncating, splitting_off, splitting_to;
