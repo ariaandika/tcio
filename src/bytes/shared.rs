@@ -45,7 +45,6 @@ const DATA_MASK: usize = 0b1;
 const RESERVED_BIT_DATA: usize = 1;
 const _: [(); 1] = [(); RESERVED_BIT_DATA];
 
-#[derive(Debug)]
 pub struct Shared {
     ptr: NonNull<u8>,
     cap: usize,
@@ -71,9 +70,27 @@ impl Shared {
 
 // ===== Allocation =====
 
-pub fn allocate(cap: usize) -> NonNull<u8> {
+/// Allocate `capacity` bytes of memory.
+///
+/// Returns dangling pointer if `capacity == 0`.
+///
+/// # Panics
+///
+/// Panics if the new capacity exceeds `isize::MAX`.
+pub fn allocate(capacity: usize) -> NonNull<u8> {
+    if capacity == 0 {
+        return NonNull::dangling();
+    }
+    if capacity > isize::MAX as usize {
+        capacity_overflow()
+    }
     unsafe {
-        let layout = Layout::from_size_align_unchecked(cap, 1);
+        // SAFETY:
+        // * `align` is 1
+        // * `align` is a power of two
+        // * `capacity` is less than isize::MAX
+        let layout = Layout::from_size_align_unchecked(capacity, 1);
+        // SAFETY: `capacity != 0`
         match NonNull::new(alloc::alloc(layout)) {
             Some(ok) => ok,
             None => alloc::handle_alloc_error(layout)
@@ -81,15 +98,29 @@ pub fn allocate(cap: usize) -> NonNull<u8> {
     }
 }
 
+/// Allocate `slice.len()` bytes of memory and copy the data.
+///
+/// Returns dangling pointer if `capacity == 0`.
+///
+/// # Panics
+///
+/// Panics if the new capacity exceeds `isize::MAX`.
 pub fn allocate_copy(slice: &[u8]) -> NonNull<u8> {
-    unsafe {
-        let mem = allocate(slice.len());
-        ptr::copy_nonoverlapping(slice.as_ptr(), mem.as_ptr(), slice.len());
-        mem
+    if slice.is_empty(){
+        return NonNull::dangling();
     }
+    let mem = allocate(slice.len());
+    unsafe { ptr::copy_nonoverlapping(slice.as_ptr(), mem.as_ptr(), slice.len()) };
+    mem
 }
 
+/// # Panics
+///
+/// Panics if the new capacity exceeds `isize::MAX` _bytes_.
 pub fn grow(ptr: NonNull<u8>, old_cap: usize, new_cap: usize) -> NonNull<u8> {
+    if new_cap > isize::MAX as usize {
+        capacity_overflow()
+    }
     unsafe {
         let layout = Layout::from_size_align_unchecked(old_cap, 1);
         match NonNull::new(alloc::realloc(ptr.as_ptr(), layout, new_cap)) {
@@ -100,8 +131,12 @@ pub fn grow(ptr: NonNull<u8>, old_cap: usize, new_cap: usize) -> NonNull<u8> {
 }
 
 pub fn deallocate(ptr: NonNull<u8>, cap: usize, offset: usize) {
+    let cap = cap + offset;
+    if cap == 0 {
+        return;
+    }
     unsafe {
-        let layout = Layout::from_size_align_unchecked(cap + offset, 1);
+        let layout = Layout::from_size_align_unchecked(cap, 1);
         alloc::dealloc(ptr.as_ptr().sub(offset), layout);
     }
 }
@@ -239,3 +274,14 @@ pub fn release_into_raw(shared: NonNull<Shared>) -> Option<(NonNull<u8>, usize)>
     let shared = unsafe { Box::from_raw(shared.as_ptr()) };
     Some((shared.ptr, shared.cap))
 }
+
+// ===== Errors =====
+
+// One central function responsible for reporting capacity overflows. This'll
+// ensure that the code generation related to these panics is minimal as there's
+// only one location which panics rather than a bunch throughout the module.
+#[cfg_attr(not(panic = "immediate-abort"), inline(never))]
+fn capacity_overflow() -> ! {
+    panic!("capacity overflow");
+}
+

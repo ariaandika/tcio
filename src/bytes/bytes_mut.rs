@@ -85,7 +85,7 @@ use std::ptr::{self, NonNull};
 use std::slice;
 
 use crate::bytes::shared::{self, Shared};
-use crate::bytes::{Buf, Bytes, UninitSlice};
+use crate::bytes::{Bytes, UninitSlice};
 
 const _: [(); size_of::<usize>() * 4] = [(); size_of::<BytesMut>()];
 const _: [(); size_of::<usize>() * 4] = [(); size_of::<Option<BytesMut>>()];
@@ -174,11 +174,7 @@ impl Drop for BytesMut {
     #[inline]
     fn drop(&mut self) {
         match shared::as_unpromoted(self.data.as_ptr()) {
-            Some(offset) => {
-                if self.cap + offset != 0 {
-                    shared::deallocate(self.ptr, self.cap, offset);
-                }
-            },
+            Some(offset) => shared::deallocate(self.ptr, self.cap, offset),
             None => shared::release(self.data),
         }
     }
@@ -203,11 +199,12 @@ impl BytesMut {
     /// Constructs a new, empty `BytesMut` with at least specified capacity.
     ///
     /// If `capacity` is zero, the buffer will not allocate.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new capacity exceeds `isize::MAX` _bytes_.
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
-        if capacity == 0 {
-            return Self::new();
-        }
         Self {
             ptr: shared::allocate(capacity),
             len: 0,
@@ -219,9 +216,6 @@ impl BytesMut {
     /// Constructs new `BytesMut`, and copy the given bytes to the buffer.
     #[inline]
     pub fn copy_from_slice(slice: &[u8]) -> Self {
-        if slice.is_empty() {
-            return Self::new();
-        }
         Self {
             ptr: shared::allocate_copy(slice),
             len: slice.len(),
@@ -251,7 +245,10 @@ impl BytesMut {
     /// Returns the number of bytes in the `BytesMut`.
     #[inline]
     pub const fn len(&self) -> usize {
-        self.len
+        let len = self.len;
+        // SAFETY: The maximum capacity is `isize::MAX` bytes
+        unsafe { std::hint::assert_unchecked(len <= isize::MAX as usize) };
+        len
     }
 
     /// Returns `true` if `BytesMut` contains no bytes.
@@ -263,19 +260,22 @@ impl BytesMut {
     /// Returns the total number of bytes that `BytesMut` can hold without reallocating.
     #[inline]
     pub const fn capacity(&self) -> usize {
-        self.cap
+        let cap = self.cap;
+        // SAFETY: The maximum capacity is `isize::MAX` bytes
+        unsafe { std::hint::assert_unchecked(cap <= isize::MAX as usize) };
+        cap
     }
 
     /// Returns the bytes as a shared slice.
     #[inline]
     pub const fn as_slice(&self) -> &[u8] {
-        unsafe { slice::from_raw_parts(self.ptr.as_ptr(), self.len) }
+        unsafe { slice::from_raw_parts(self.as_ptr(), self.len()) }
     }
 
     /// Returns the bytes as a mutable slice.
     #[inline]
     pub const fn as_mut_slice(&mut self) -> &mut [u8] {
-        unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr(), self.len) }
+        unsafe { slice::from_raw_parts_mut(self.as_mut_ptr(), self.len()) }
     }
 
     /// Returns a raw pointer to the buffer, or a dangling raw pointer valid for zero sized reads
@@ -303,9 +303,9 @@ impl BytesMut {
     ///
     /// ```
     /// # use tcio::bytes::BytesMut;
-    /// let mut v = BytesMut::with_capacity(10);
+    /// let mut bytes = BytesMut::with_capacity(10);
     ///
-    /// let uninit = v.spare_capacity_mut();
+    /// let uninit = bytes.spare_capacity_mut();
     /// assert!(uninit.len() >= 10);
     ///
     /// // Fill in the first 3 elements.
@@ -314,14 +314,17 @@ impl BytesMut {
     /// uninit[2].write(6);
     ///
     /// // Mark the first 3 elements of the vector as being initialized.
-    /// unsafe { v.set_len(3) };
+    /// unsafe { bytes.set_len(3) };
     ///
-    /// assert_eq!(&v, &[2, 4, 6]);
+    /// assert_eq!(&bytes, &[2, 4, 6]);
     /// ```
     #[inline]
     pub const fn spare_capacity_mut(&mut self) -> &mut [MaybeUninit<u8>] {
         unsafe {
-            slice::from_raw_parts_mut(self.ptr.as_ptr().add(self.len).cast(), self.cap - self.len)
+            slice::from_raw_parts_mut(
+                self.ptr.as_ptr().add(self.len()).cast(),
+                self.capacity() - self.len()
+            )
         }
     }
 
@@ -330,7 +333,7 @@ impl BytesMut {
     /// (ptr, len, cap, data)
     pub(super) fn into_raw_parts(self) -> (NonNull<u8>, usize, usize, NonNull<Shared>) {
         let me = std::mem::ManuallyDrop::new(self);
-        (me.ptr, me.len, me.cap, me.data)
+        (me.ptr, me.len(), me.capacity(), me.data)
     }
 }
 
@@ -354,9 +357,10 @@ impl BytesMut {
         if additional == 0 {
             return;
         }
-        if self.cap - self.len < additional {
+        if self.capacity() - self.len() < additional {
             self.reserve_inner(std::num::NonZeroUsize::new(additional));
         }
+        unsafe { std::hint::assert_unchecked(self.capacity() - self.len() >= additional); }
     }
 
     /// Try to reclaim leftover capacity without allocating.
@@ -544,11 +548,9 @@ impl BytesMut {
     /// Panics if `at > self.len()`.
     #[inline]
     pub fn split_to(&mut self, at: usize) -> Self {
-        if at <= self.len {
-            // SAFETY: `at <= self.len`
-            unsafe { self.split_to_unchecked(at) }
-        } else {
-            split_fail(at, self.len)
+        match self.try_split_to(at) {
+            Some(ok) => ok,
+            None => split_fail(at, self.len),
         }
     }
 
@@ -573,7 +575,7 @@ impl BytesMut {
     /// ```
     #[inline]
     pub fn try_split_to(&mut self, at: usize) -> Option<Self> {
-        if at <= self.len {
+        if at <= self.len() {
             // SAFETY: `at <= self.len`
             unsafe { Some(self.split_to_unchecked(at)) }
         } else {
@@ -585,7 +587,7 @@ impl BytesMut {
     ///
     /// `at <= self.len`
     unsafe fn split_to_unchecked(&mut self, at: usize) -> Self {
-        debug_assert!(at <= self.len);
+        debug_assert!(at <= self.len());
         self.increment();
         let ptr = self.ptr;
         self.ptr = unsafe { ptr.add(at) };
@@ -622,11 +624,9 @@ impl BytesMut {
     /// Panics if `at > self.len()`.
     #[inline]
     pub fn split_off(&mut self, at: usize) -> Self {
-        if at <= self.len {
-            // SAFETY: `at <= self.len`
-            unsafe { self.split_off_unchecked(at) }
-        } else {
-            split_fail(at, self.len)
+        match self.try_split_off(at) {
+            Some(ok) => ok,
+            None => split_fail(at, self.len),
         }
     }
 
@@ -651,7 +651,7 @@ impl BytesMut {
     /// ```
     #[inline]
     pub fn try_split_off(&mut self, at: usize) -> Option<Self> {
-        if at <= self.len {
+        if at <= self.len() {
             // SAFETY: `at <= self.len`
             unsafe { Some(self.split_off_unchecked(at)) }
         } else {
@@ -685,12 +685,11 @@ impl BytesMut {
         }
 
         debug_assert!(
-            count <= self.cap,
+            count <= self.capacity(),
             "BytesMut::advance_unchecked out of bounds"
         );
 
         if let Ok(offset) = shared::as_unpromoted_non_null(self.data) {
-            // SAFETY: `self.data` is unpromoted
             self.data = shared::mask_payload(self.data.as_ptr(), offset + count);
         }
 
@@ -701,7 +700,7 @@ impl BytesMut {
 
     fn increment(&mut self) {
         match shared::as_unpromoted_non_null(self.data) {
-            Ok(offset) => self.data = shared::promote_with(self.ptr, self.cap, offset, 2),
+            Ok(offset) => self.data = shared::promote_with(self.ptr, self.capacity(), offset, 2),
             Err(shared) => shared::increment(shared),
         }
     }
@@ -718,7 +717,7 @@ impl BytesMut {
     /// * The elements at `old_len..new_len` must be initialized.
     #[inline]
     pub const unsafe fn set_len(&mut self, new_len: usize) {
-        debug_assert!(new_len <= self.cap, "out of bounds");
+        debug_assert!(new_len <= self.capacity(), "length out of bounds");
         self.len = new_len;
     }
 
@@ -823,7 +822,7 @@ impl BytesMut {
             return Ok(());
         }
 
-        let ptr = unsafe { self.ptr.add(self.len) };
+        let ptr = unsafe { self.ptr.add(self.len()) };
 
         if ptr == other.ptr
             && shared::is_promoted(self.data.as_ptr())
@@ -1019,7 +1018,7 @@ impl crate::bytes::BufMut for BytesMut {
         unsafe { self.set_len(self.len() + cnt) };
     }
 
-    fn put<T: Buf>(&mut self, mut src: T)
+    fn put<T: crate::bytes::Buf>(&mut self, mut src: T)
     where
         Self: Sized,
     {
@@ -1057,7 +1056,7 @@ impl std::io::Read for BytesMut {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let read = buf.len().min(self.len());
         buf[..read].copy_from_slice(&self[..read]);
-        self.advance(read);
+        crate::bytes::Buf::advance(self, read);
         Ok(read)
     }
 }
@@ -1075,8 +1074,7 @@ impl std::io::Write for BytesMut {
     }
 }
 
-// ===== panics =====
-
+// ===== Panics =====
 // The panic code path was put into a cold function to not bloat the call site.
 
 #[cfg_attr(not(panic = "immediate-abort"), inline(never), cold)]
