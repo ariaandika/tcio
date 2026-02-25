@@ -378,7 +378,7 @@ impl BytesMut {
             return;
         }
         if self.capacity() - self.len() < additional {
-            self.reserve_inner(std::num::NonZeroUsize::new(additional));
+            self.reserve_inner(additional);
         }
         unsafe { std::hint::assert_unchecked(self.capacity() - self.len() >= additional); }
     }
@@ -386,7 +386,7 @@ impl BytesMut {
     /// Try to reclaim leftover capacity without allocating.
     #[inline]
     pub fn reclaim(&mut self) {
-        self.reserve_inner(None);
+        self.reserve_inner(0);
     }
 
     /// Separate allocation call to allow `reserve` te be inlined
@@ -394,13 +394,17 @@ impl BytesMut {
     /// Before reallocating, this will try to reclaim leftover capacity.
     ///
     /// The strategy is explain at the top of the file.
-    #[inline(never)]
-    fn reserve_inner(&mut self, additional: Option<std::num::NonZeroUsize>) {
+    #[cold]
+    fn reserve_inner(&mut self, additional: usize) {
         let (base_raw, offset) = match shared::as_unpromoted_non_null(self.data) {
-            Ok(offset) => (
-                Some((unsafe { self.ptr.sub(offset) }, self.cap + offset)),
-                offset,
-            ),
+            Ok(offset) => {
+                let ptr = if self.cap == 0 {
+                    None // dangling pointer
+                } else {
+                    Some((unsafe { self.ptr.sub(offset) }, self.cap + offset))
+                };
+                (ptr, offset)
+            },
             Err(shared) => {
                 if shared::is_unique(shared) {
                     let base_raw = (shared.as_non_null(), shared.capacity());
@@ -431,12 +435,11 @@ impl BytesMut {
             offset
         };
 
-        let Some(add) = additional else {
+        // checks if further allocation required
+        if additional == 0 {
             return;
-        };
-        let additional = add.get();
+        }
         if self.cap - self.len >= additional {
-            // enough capacity without reallocating
             return;
         }
 
@@ -463,18 +466,24 @@ impl BytesMut {
                 self.cap = new_cap - offset;
             }
             None => {
-                // the buffer is not exclusive, `shared::grow` cannot be used, new allocation is
-                // required
+                // the buffer is not exclusive, or pointer is dangling
+                //
+                // `shared::grow` cannot be used, new allocation is required
 
                 // SAFETY: `new_cap` is `1..=isize::MAX`
                 let new_base_ptr = unsafe { shared::allocate(new_cap) };
-                unsafe {
-                    ptr::copy_nonoverlapping(
-                        self.ptr.as_ptr().add(offset),
-                        new_base_ptr.as_ptr(),
-                        self.len
-                    )
-                };
+
+                // checks for dangling pointer
+                if self.cap != 0 {
+                    unsafe {
+                        ptr::copy_nonoverlapping(
+                            self.ptr.as_ptr().add(offset),
+                            new_base_ptr.as_ptr(),
+                            self.len
+                        )
+                    }
+                }
+
                 shared::release(self.data);
                 self.ptr = new_base_ptr;
                 self.cap = new_cap;
