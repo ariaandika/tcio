@@ -64,13 +64,19 @@ impl Bytes {
     /// Create new [`Bytes`] by copying given bytes.
     #[inline]
     pub fn copy_from_slice(slice: &[u8]) -> Self {
-        if slice.is_empty() {
-            return Self::empty(
-                NonNull::new(slice.as_ptr().cast_mut()).expect("reference cannot be null"),
-            );
-        }
+        let ptr = if slice.is_empty() {
+            NonNull::new(slice.as_ptr().cast_mut()).expect("ref cannot be null")
+        } else {
+            unsafe {
+                // SAFETY: `slice.len()` is `1..=isize::MAX`, no allocation can be larger than
+                // `isize::MAX` bytes.
+                let ptr = shared::allocate(slice.len());
+                ptr.as_ptr().copy_from_nonoverlapping(slice.as_ptr(), slice.len());
+                ptr
+            }
+        };
         Self {
-            ptr: shared::allocate_copy(slice),
+            ptr,
             len: slice.len(),
             data: AtomicPtr::new(shared::NEW_UNPROMOTED.as_ptr()),
         }

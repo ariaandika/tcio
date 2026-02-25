@@ -74,16 +74,11 @@ impl Shared {
 ///
 /// Returns dangling pointer if `capacity == 0`.
 ///
-/// # Panics
+/// # Safety
 ///
-/// Panics if the new capacity exceeds `isize::MAX`.
-pub fn allocate(capacity: usize) -> NonNull<u8> {
-    if capacity == 0 {
-        return NonNull::dangling();
-    }
-    if capacity > isize::MAX as usize {
-        capacity_overflow()
-    }
+/// `capacity` must be `1..=isize::MAX`.
+pub unsafe fn allocate(capacity: usize) -> NonNull<u8> {
+    debug_assert!((1..=isize::MAX as usize).contains(&capacity));
     unsafe {
         // SAFETY:
         // * `align` is 1
@@ -96,22 +91,6 @@ pub fn allocate(capacity: usize) -> NonNull<u8> {
             None => alloc::handle_alloc_error(layout)
         }
     }
-}
-
-/// Allocate `slice.len()` bytes of memory and copy the data.
-///
-/// Returns dangling pointer if `capacity == 0`.
-///
-/// # Panics
-///
-/// Panics if the new capacity exceeds `isize::MAX`.
-pub fn allocate_copy(slice: &[u8]) -> NonNull<u8> {
-    if slice.is_empty(){
-        return NonNull::dangling();
-    }
-    let mem = allocate(slice.len());
-    unsafe { ptr::copy_nonoverlapping(slice.as_ptr(), mem.as_ptr(), slice.len()) };
-    mem
 }
 
 /// # Panics
@@ -281,7 +260,7 @@ pub fn release_into_raw(shared: NonNull<Shared>) -> Option<(NonNull<u8>, usize)>
 // ensure that the code generation related to these panics is minimal as there's
 // only one location which panics rather than a bunch throughout the module.
 #[cfg_attr(not(panic = "immediate-abort"), inline(never))]
-fn capacity_overflow() -> ! {
+pub fn capacity_overflow() -> ! {
     panic!("capacity overflow");
 }
 

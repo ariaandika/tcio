@@ -205,8 +205,17 @@ impl BytesMut {
     /// Panics if the new capacity exceeds `isize::MAX` _bytes_.
     #[inline]
     pub fn with_capacity(capacity: usize) -> Self {
+        if capacity > isize::MAX as usize {
+            shared::capacity_overflow()
+        }
+        let ptr = if capacity == 0 {
+            NonNull::dangling()
+        } else {
+            // SAFETY: `capacity` is `1..=isize::MAX`
+            unsafe { shared::allocate(capacity) }
+        };
         Self {
-            ptr: shared::allocate(capacity),
+            ptr,
             len: 0,
             cap: capacity,
             data: shared::NEW_UNPROMOTED,
@@ -216,8 +225,19 @@ impl BytesMut {
     /// Constructs new `BytesMut`, and copy the given bytes to the buffer.
     #[inline]
     pub fn copy_from_slice(slice: &[u8]) -> Self {
+        let ptr = if slice.is_empty() {
+            NonNull::new(slice.as_ptr().cast_mut()).expect("ref cannot be null")
+        } else {
+            unsafe {
+                // SAFETY: `slice.len()` is `1..=isize::MAX`, no allocation can be larger than
+                // `isize::MAX` bytes.
+                let ptr = shared::allocate(slice.len());
+                ptr.as_ptr().copy_from_nonoverlapping(slice.as_ptr(), slice.len());
+                ptr
+            }
+        };
         Self {
-            ptr: shared::allocate_copy(slice),
+            ptr,
             len: slice.len(),
             cap: slice.len(),
             data: shared::NEW_UNPROMOTED,
@@ -424,10 +444,11 @@ impl BytesMut {
             Some((_, base_cap)) => base_cap,
             None => self.cap + offset,
         };
+
         let exp = base_cap.checked_mul(2);
         let add = (self.len + offset).checked_add(additional);
-        let Some(new_cap) = cmp::max(exp, add) else {
-            panic!("capacity overflow");
+        let Some(new_cap) = cmp::max(exp, add).filter(|&e| e <= isize::MAX as usize) else {
+            shared::capacity_overflow()
         };
 
         // allocation
@@ -444,7 +465,9 @@ impl BytesMut {
             None => {
                 // the buffer is not exclusive, `shared::grow` cannot be used, new allocation is
                 // required
-                let new_base_ptr = shared::allocate(new_cap);
+
+                // SAFETY: `new_cap` is `1..=isize::MAX`
+                let new_base_ptr = unsafe { shared::allocate(new_cap) };
                 unsafe {
                     ptr::copy_nonoverlapping(
                         self.ptr.as_ptr().add(offset),
