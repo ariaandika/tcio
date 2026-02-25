@@ -60,19 +60,21 @@ impl Shared {
         self.ptr
     }
 
-    pub fn grow(&mut self, new_cap: usize) -> NonNull<u8> {
+    /// This method should be used only when reallocating
+    ///
+    /// # Safety
+    ///
+    /// self must be unique.
+    pub unsafe fn set_raw_parts(&mut self, ptr: NonNull<u8>, cap: usize) {
         debug_assert!(self::is_unique(self));
-        self.ptr = self::grow(self.ptr, self.cap, new_cap);
-        self.cap = new_cap;
-        self.ptr
+        self.ptr = ptr;
+        self.cap = cap;
     }
 }
 
 // ===== Allocation =====
 
 /// Allocate `capacity` bytes of memory.
-///
-/// Returns dangling pointer if `capacity == 0`.
 ///
 /// # Safety
 ///
@@ -93,13 +95,12 @@ pub unsafe fn allocate(capacity: usize) -> NonNull<u8> {
     }
 }
 
-/// # Panics
+/// # Safety
 ///
-/// Panics if the new capacity exceeds `isize::MAX` _bytes_.
-pub fn grow(ptr: NonNull<u8>, old_cap: usize, new_cap: usize) -> NonNull<u8> {
-    if new_cap > isize::MAX as usize {
-        capacity_overflow()
-    }
+/// Both capacity must be `1..=isize::MAX`.
+pub unsafe fn grow(ptr: NonNull<u8>, old_cap: usize, new_cap: usize) -> NonNull<u8> {
+    debug_assert!((1..=isize::MAX as usize).contains(&old_cap));
+    debug_assert!((1..=isize::MAX as usize).contains(&new_cap));
     unsafe {
         let layout = Layout::from_size_align_unchecked(old_cap, 1);
         match NonNull::new(alloc::realloc(ptr.as_ptr(), layout, new_cap)) {

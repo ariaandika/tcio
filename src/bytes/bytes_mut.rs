@@ -448,6 +448,8 @@ impl BytesMut {
             None => self.cap + offset,
         };
 
+        // - `new_cap <= isize::MAX`,
+        // - because `additional` is non-zero, `new_cap` is non-zero
         let exp = base_cap.checked_mul(2);
         let add = (self.len + offset).checked_add(additional);
         let Some(new_cap) = cmp::max(exp, add).filter(|&e| e <= isize::MAX as usize) else {
@@ -457,11 +459,16 @@ impl BytesMut {
         // allocation
         match base_raw {
             Some((base_ptr, base_cap)) => {
-                let new_ptr = if shared::is_unpromoted(self.data.as_ptr()) {
-                    shared::grow(base_ptr, base_cap, new_cap)
-                } else {
-                    unsafe { self.data.as_mut().grow(new_cap) }
-                };
+                // the buffer is exclusive
+
+                // SAFETY:
+                // - `base_cap` is previous allocation
+                // - `new_cap` is checked
+                let new_ptr = unsafe { shared::grow(base_ptr, base_cap, new_cap) };
+                if shared::is_promoted(self.data.as_ptr()) {
+                    // SAFETY: shared is promoted and exclusive
+                    unsafe { self.data.as_mut().set_raw_parts(new_ptr, new_cap) };
+                }
                 self.ptr = unsafe { new_ptr.add(offset) };
                 self.cap = new_cap - offset;
             }
