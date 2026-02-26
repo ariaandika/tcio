@@ -353,8 +353,10 @@ impl Buf for Bytes {
 
     #[inline]
     fn advance(&mut self, cnt: usize) {
-        assert!(cnt <= self.len(), "out of bounds");
-        // SAFETY: cnt <= self.len
+        if cnt > self.len() {
+            advance_fail(cnt, self.len());
+        }
+        // SAFETY: `cnt <= self.len()`
         unsafe { self.advance_unchecked(cnt) };
     }
 
@@ -385,16 +387,11 @@ impl Buf for BytesMut {
 
     #[inline]
     fn advance(&mut self, cnt: usize) {
-        assert!(
-            cnt <= self.len(),
-            "cannot advance past `len`: {:?} <= {:?}",
-            cnt,
-            self.len(),
-        );
-        unsafe {
-            // SAFETY: `cnt <= self.len`, and `self.len <= self.cap`
-            self.advance_unchecked(cnt);
+        if cnt > self.len() {
+            advance_fail(cnt, self.len());
         }
+        // SAFETY: `cnt <= self.len()`
+        unsafe { self.advance_unchecked(cnt) };
     }
 
     // skip default implementation that anticipate for non-contiguous bytes
@@ -451,8 +448,13 @@ impl<T: Buf + ?Sized> Buf for Box<T> {
 #[cfg_attr(not(panic = "immediate-abort"), inline(never), cold)]
 #[cfg_attr(panic = "immediate-abort", inline)]
 #[track_caller]
+fn advance_fail(cnt: usize, len: usize) -> ! {
+    panic!("advancing ({cnt}) out of bounds of length ({len})")
+}
+
+#[cfg_attr(not(panic = "immediate-abort"), inline(never), cold)]
+#[cfg_attr(panic = "immediate-abort", inline)]
+#[track_caller]
 fn remaining_fail(src_len: usize, req_len: usize) -> ! {
-    panic!(
-        "source remaining ({src_len}) is less than requested length ({req_len})"
-    )
+    panic!("source remaining ({src_len}) is less than requested length ({req_len})")
 }

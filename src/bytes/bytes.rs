@@ -115,7 +115,10 @@ impl Bytes {
     /// Returns the number of bytes in the `Bytes`.
     #[inline]
     pub const fn len(&self) -> usize {
-        self.len
+        let len = self.len;
+        // SAFETY: The maximum capacity is `isize::MAX` bytes
+        unsafe { std::hint::assert_unchecked(len <= isize::MAX as usize) };
+        len
     }
 
     /// Returns `true` if `Bytes` contains no bytes.
@@ -149,18 +152,7 @@ impl Bytes {
     ///
     /// `range` should be in bounds of bytes length, otherwise panic.
     pub fn slice(&self, range: impl core::ops::RangeBounds<usize>) -> Self {
-        use core::ops::Bound;
-        let start = match range.start_bound() {
-            Bound::Included(&n) => n,
-            Bound::Excluded(&n) => n.strict_add(1),
-            Bound::Unbounded => 0,
-        };
-        let end = match range.end_bound() {
-            Bound::Included(&n) => n.strict_add(1),
-            Bound::Excluded(&n) => n,
-            Bound::Unbounded => self.len,
-        };
-        self.slice_inner(start, end).expect("out of bounds")
+        self.try_slice(range).expect("out of bounds")
     }
 
     /// Returns the shared subset of `Bytes` with given range.
@@ -188,7 +180,7 @@ impl Bytes {
         let end = match range.end_bound() {
             Bound::Included(&n) => n.checked_add(1)?,
             Bound::Excluded(&n) => n,
-            Bound::Unbounded => self.len,
+            Bound::Unbounded => self.len(),
         };
         self.slice_inner(start, end)
     }
@@ -202,23 +194,20 @@ impl Bytes {
         use core::ops::Bound;
         let start = match range.start_bound() {
             Bound::Included(&n) => n,
-            Bound::Excluded(&n) => n.strict_add(1),
+            Bound::Excluded(&n) => unsafe { n.unchecked_add(1) },
             Bound::Unbounded => 0,
         };
         let end = match range.end_bound() {
-            Bound::Included(&n) => n.strict_add(1),
+            Bound::Included(&n) => unsafe { n.unchecked_add(1) },
             Bound::Excluded(&n) => n,
-            Bound::Unbounded => self.len,
+            Bound::Unbounded => self.len(),
         };
         debug_assert!(start <= end);
-        debug_assert!(end <= self.len);
-        // SAFETY: guarantee by the caller
-        let ptr = unsafe { self.ptr.add(start) };
-        let len = end - start;
+        debug_assert!(end <= self.len());
         let data = self.increment();
         Self {
-            ptr,
-            len,
+            ptr: unsafe { self.ptr.add(start) },
+            len: end - start,
             data: AtomicPtr::new(data),
         }
     }
@@ -316,7 +305,11 @@ impl Bytes {
     /// ```
     #[inline]
     pub fn truncate(&mut self, len: usize) {
-        if len >= self.len {
+        if len == 0 {
+            *self = Self::empty(self.ptr);
+            return;
+        }
+        if len > self.len() {
             return;
         }
         // this introduce "tail offset",
@@ -334,22 +327,31 @@ impl Bytes {
         *self = Self::empty(self.ptr);
     }
 
-    pub(crate) unsafe fn advance_unchecked(&mut self, count: usize) {
+    /// Advance the cursor without performing bounds checks.
+    ///
+    /// For safe alternative, see [`Buf::advance`].
+    ///
+    /// [`Buf::advance`]: crate::bytes::Buf::advance
+    ///
+    /// # Safety
+    ///
+    /// `count <= self.len()`
+    #[inline]
+    pub unsafe fn advance_unchecked(&mut self, count: usize) {
         if count == self.len {
-            self.clear();
+            *self = Self::empty(self.ptr);
             return;
         }
 
-        debug_assert!(count <= self.len, "safety violated, out of bounds");
+        debug_assert!(count <= self.len(), "advance out of bounds");
 
-        let data = *self.data.get_mut();
-        if let Some(offset) = shared::as_unpromoted(data) {
-            *self.data.get_mut() = shared::mask_payload(data, offset + count).as_ptr();
+        let data_mut = self.data.get_mut();
+        if let Some(offset) = shared::as_unpromoted(*data_mut) {
+            *data_mut = shared::mask_payload(*data_mut, offset + count).as_ptr();
         }
 
         // SAFETY: caller ensure `count <= self.len`, and `ptr` is valid until `self.cap` forward
-        unsafe { self.ptr = self.ptr.add(count) };
-
+        self.ptr = unsafe { self.ptr.add(count) };
         self.len -= count;
     }
 }
@@ -379,11 +381,9 @@ impl Bytes {
     /// Panics if `at > self.len()`.
     #[inline]
     pub fn split_off(&mut self, at: usize) -> Self {
-        if at <= self.len {
-            // SAFETY: `at <= self.len`
-            unsafe { self.split_off_unchecked(at) }
-        } else {
-            split_fail(at, self.len)
+        match self.try_split_off(at) {
+            Some(ok) => ok,
+            None => split_fail(at, self.len),
         }
     }
 
@@ -412,7 +412,7 @@ impl Bytes {
     /// ```
     #[inline]
     pub fn try_split_off(&mut self, at: usize) -> Option<Self> {
-        if at <= self.len {
+        if at <= self.len() {
             // SAFETY: `at < self.len`
             unsafe { Some(self.split_off_unchecked(at)) }
         } else {
@@ -420,10 +420,17 @@ impl Bytes {
         }
     }
 
+    /// Splits `Bytes` into two at the given index, without doing bounds checking.
+    ///
+    /// For safe alternative, see [`split_off`].
+    ///
+    /// [`split_off`]: Self::split_off
+    ///
     /// # Safety
     ///
-    /// `at <= self.len`
-    unsafe fn split_off_unchecked(&mut self, at: usize) -> Self {
+    /// `at <= self.len()`
+    #[inline]
+    pub unsafe fn split_off_unchecked(&mut self, at: usize) -> Self {
         if at == 0 {
             return mem::replace(self, Self::empty(self.ptr));
         }
@@ -464,11 +471,9 @@ impl Bytes {
     /// Panics if `at > self.len()`.
     #[inline]
     pub fn split_to(&mut self, at: usize) -> Self {
-        if at <= self.len {
-            // SAFETY: `at <= self.len`
-            unsafe { self.split_to_unchecked(at) }
-        } else {
-            split_fail(at, self.len)
+        match self.try_split_to(at) {
+            Some(ok) => ok,
+            None => split_fail(at, self.len),
         }
     }
 
@@ -505,10 +510,17 @@ impl Bytes {
         }
     }
 
+    /// Splits `Bytes` into two at the given index, without doing bounds checking.
+    ///
+    /// For safe alternative, see [`split_to`].
+    ///
+    /// [`split_to`]: Self::split_to
+    ///
     /// # Safety
     ///
-    /// `at <= self.len`
-    unsafe fn split_to_unchecked(&mut self, at: usize) -> Self {
+    /// `at <= self.len()`
+    #[inline]
+    pub unsafe fn split_to_unchecked(&mut self, at: usize) -> Self {
         if at == 0 {
             return Self::empty(self.ptr);
         }
@@ -545,13 +557,24 @@ impl Bytes {
         }
     }
 
+    #[inline]
     fn increment(&self) -> *mut Shared {
         let data = self.data.load(Ordering::Relaxed);
         let Some(shared) = NonNull::new(data) else {
             return data;
         };
         match shared::as_unpromoted_non_null(shared) {
-            Ok(offset) => promote_ref(self, offset, shared),
+            Ok(offset) => {
+                let data = promote_ref(self, offset, shared);
+                // this eliminate any branch for `as_unpromoted_non_null` calls
+                if shared::is_unpromoted(self.data.load(Ordering::Relaxed)) {
+                    unsafe { std::hint::unreachable_unchecked() };
+                }
+                if shared::is_unpromoted(data) {
+                    unsafe { std::hint::unreachable_unchecked() };
+                }
+                data
+            },
             Err(shared_ref) => {
                 shared::increment(shared_ref);
                 data
@@ -559,6 +582,7 @@ impl Bytes {
         }
     }
 
+    #[inline]
     fn increment_mut(&mut self) {
         let Some(shared) = NonNull::new(*self.data.get_mut()) else {
             return;
@@ -568,6 +592,11 @@ impl Bytes {
             // happen concurrently
             Ok(offset) => {
                 *self.data.get_mut() = shared::promote_with(self.ptr, self.len, offset, 2).as_ptr();
+
+                // this eliminate any branch for `as_unpromoted_non_null` calls
+                if shared::is_unpromoted(*self.data.get_mut()) {
+                    unsafe { std::hint::unreachable_unchecked() };
+                }
             }
             Err(shared_ref) => shared::increment(shared_ref),
         }
