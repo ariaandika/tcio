@@ -38,7 +38,7 @@ extern crate alloc as base_alloc;
 /// this represent that the pointer is promoted
 const _: [(); align_of::<Shared>() % 2] = [];
 
-const DATA_PROMOTED: usize = 0b0;
+// const DATA_PROMOTED: usize = 0b0;
 const DATA_UNPROMOTED: usize = 0b1;
 const DATA_MASK: usize = 0b1;
 
@@ -131,7 +131,7 @@ pub fn is_unpromoted(data: *const Shared) -> bool {
 }
 
 pub fn is_promoted(data: *const Shared) -> bool {
-    data.addr() & DATA_MASK == DATA_PROMOTED
+    data.addr() & DATA_MASK != DATA_UNPROMOTED
 }
 
 pub fn as_unpromoted_non_null<'a>(data: NonNull<Shared>) -> Result<usize, &'a Shared> {
@@ -169,6 +169,7 @@ pub fn mask_payload(data: *mut Shared, value: usize) -> NonNull<Shared> {
     }
 }
 
+#[cold]
 pub fn promote_with(ptr: NonNull<u8>, cap: usize, offset: usize, ref_count: usize) -> NonNull<Shared> {
     NonNull::new(Box::into_raw(Box::new(Shared {
         ref_count: AtomicUsize::new(ref_count),
@@ -212,18 +213,15 @@ pub fn increment(shared: &Shared) {
     }
 }
 
-#[allow(clippy::boxed_local, reason = "`Shared` always in the heap")]
 pub fn release(shared: NonNull<Shared>) {
-    debug_assert!(self::is_promoted(shared.as_ptr()));
-    // SAFETY: `release_into_vec` with `0` will always safe
     if let Some((ptr, cap)) = self::release_into_raw(shared) {
         deallocate(ptr, cap, 0);
     }
 }
 
-#[allow(clippy::boxed_local, reason = "`Shared` always in the heap")]
 pub fn release_into_raw(shared: NonNull<Shared>) -> Option<(NonNull<u8>, usize)> {
-    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{Ordering, fence};
+
     debug_assert!(self::is_promoted(shared.as_ptr()));
 
     // follow the drop procedure from `Arc`
@@ -248,7 +246,7 @@ pub fn release_into_raw(shared: NonNull<Shared>) -> Option<(NonNull<u8>, usize)>
     // > "acquire" operation before deleting the object.
     //
     // [1]: (www.boost.org/doc/libs/1_55_0/doc/html/atomic/usage_examples.html)
-    std::sync::atomic::fence(Ordering::Acquire);
+    fence(Ordering::Acquire);
 
     // `Shared` is unique, thus converting to exclusive ownership is safe
     let shared = unsafe { Box::from_raw(shared.as_ptr()) };

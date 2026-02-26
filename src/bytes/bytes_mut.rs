@@ -380,7 +380,9 @@ impl BytesMut {
         if self.capacity() - self.len() < additional {
             self.reserve_inner(additional);
         }
-        unsafe { std::hint::assert_unchecked(self.capacity() - self.len() >= additional); }
+        if self.capacity() - self.len() < additional {
+            unsafe { std::hint::unreachable_unchecked() };
+        }
     }
 
     /// Try to reclaim leftover capacity without allocating.
@@ -401,7 +403,7 @@ impl BytesMut {
                 let ptr = if self.cap == 0 {
                     None // dangling pointer
                 } else {
-                    Some((unsafe { self.ptr.sub(offset) }, self.cap + offset))
+                    Some((unsafe { self.ptr.sub(offset) }, self.capacity() + offset))
                 };
                 (ptr, offset)
             },
@@ -422,9 +424,9 @@ impl BytesMut {
 
         // copy the data backwards, only if its nonoverlapping and the buffer is exclusively owned
         let offset = if let Some((base_ptr, base_cap)) = base_raw
-            && offset >= self.len
+            && offset >= self.len()
         {
-            unsafe { ptr::copy_nonoverlapping(self.ptr.as_ptr(), base_ptr.as_ptr(), self.len) };
+            unsafe { ptr::copy_nonoverlapping(self.ptr.as_ptr(), base_ptr.as_ptr(), self.len()) };
             self.ptr = base_ptr;
             self.cap = base_cap;
             if shared::is_unpromoted(self.data.as_ptr()) {
@@ -439,19 +441,19 @@ impl BytesMut {
         if additional == 0 {
             return;
         }
-        if self.cap - self.len >= additional {
+        if self.capacity() - self.len() >= additional {
             return;
         }
 
         let base_cap = match base_raw {
             Some((_, base_cap)) => base_cap,
-            None => self.cap + offset,
+            None => self.capacity() + offset,
         };
 
         // - `new_cap <= isize::MAX`,
         // - because `additional` is non-zero, `new_cap` is non-zero
         let exp = base_cap.checked_mul(2);
-        let add = (self.len + offset).checked_add(additional);
+        let add = (self.len() + offset).checked_add(additional);
         let Some(new_cap) = cmp::max(exp, add).filter(|&e| e <= isize::MAX as usize) else {
             shared::capacity_overflow()
         };
@@ -486,7 +488,7 @@ impl BytesMut {
                         ptr::copy_nonoverlapping(
                             self.ptr.as_ptr().add(offset),
                             new_base_ptr.as_ptr(),
-                            self.len
+                            self.len()
                         )
                     }
                 }
@@ -517,9 +519,10 @@ impl BytesMut {
     /// ```
     #[inline]
     pub const fn truncate(&mut self, len: usize) {
-        if len < self.len {
-            self.len = len;
+        if len > self.len() {
+            return;
         }
+        self.len = len;
     }
 
     /// Clears the `BytesMut`, removing all bytes.
@@ -561,7 +564,7 @@ impl BytesMut {
     #[inline]
     pub fn split(&mut self) -> Self {
         // SAFETY: `self.len <= self.len`
-        unsafe { self.split_to_unchecked(self.len) }
+        unsafe { self.split_to_unchecked(self.len()) }
     }
 
     /// Splits `BytesMut` into two at the given index.
@@ -622,10 +625,17 @@ impl BytesMut {
         }
     }
 
+    /// Splits `BytesMut` into two at the given index, without doing bounds checking.
+    ///
+    /// For safe alternative, see [`split_to`].
+    ///
+    /// [`split_to`]: Self::split_to
+    ///
     /// # Safety
     ///
-    /// `at <= self.len`
-    unsafe fn split_to_unchecked(&mut self, at: usize) -> Self {
+    /// `at <= self.len()`
+    #[inline]
+    pub unsafe fn split_to_unchecked(&mut self, at: usize) -> Self {
         debug_assert!(at <= self.len());
         self.increment();
         let ptr = self.ptr;
@@ -698,11 +708,18 @@ impl BytesMut {
         }
     }
 
+    /// Splits `BytesMut` into two at the given index, without doing bounds checking.
+    ///
+    /// For safe alternative, see [`split_off`].
+    ///
+    /// [`split_off`]: Self::split_off
+    ///
     /// # Safety
     ///
-    /// `at <= self.len`
-    unsafe fn split_off_unchecked(&mut self, at: usize) -> Self {
-        debug_assert!(at <= self.len);
+    /// `at <= self.len()`
+    #[inline]
+    pub unsafe fn split_off_unchecked(&mut self, at: usize) -> Self {
+        debug_assert!(at <= self.len());
         self.increment();
         let Self { len, cap, .. } = *self;
         self.len = at;
@@ -715,18 +732,22 @@ impl BytesMut {
         }
     }
 
+    /// Advance the cursor without performing bounds checks.
+    ///
+    /// For safe alternative, see [`Buf::advance`].
+    ///
+    /// [`Buf::advance`]: crate::bytes::Buf::advance
+    ///
     /// # Safety
     ///
-    /// `count <= self.cap`
-    pub(crate) unsafe fn advance_unchecked(&mut self, count: usize) {
+    /// `count <= self.len()`
+    #[inline]
+    pub unsafe fn advance_unchecked(&mut self, count: usize) {
         if count == 0 {
             return;
         }
 
-        debug_assert!(
-            count <= self.capacity(),
-            "BytesMut::advance_unchecked out of bounds"
-        );
+        debug_assert!(count <= self.len(), "advance out of bounds");
 
         if let Ok(offset) = shared::as_unpromoted_non_null(self.data) {
             self.data = shared::mask_payload(self.data.as_ptr(), offset + count);
@@ -737,9 +758,17 @@ impl BytesMut {
         self.cap -= count;
     }
 
+    #[inline] // inline to allow optimizer removes `match` for promoted buffer
     fn increment(&mut self) {
         match shared::as_unpromoted_non_null(self.data) {
-            Ok(offset) => self.data = shared::promote_with(self.ptr, self.capacity(), offset, 2),
+            Ok(offset) => {
+                self.data = shared::promote_with(self.ptr, self.capacity(), offset, 2);
+
+                // this eliminate any branch for `as_unpromoted_non_null` calls
+                if shared::is_unpromoted(self.data.as_ptr()) {
+                    unsafe { std::hint::unreachable_unchecked() };
+                }
+            },
             Err(shared) => shared::increment(shared),
         }
     }
