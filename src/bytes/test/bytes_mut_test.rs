@@ -50,10 +50,22 @@ fn advancing((mut bytes, expect): Cx) -> Cx {
     (bytes, &expect[2..])
 }
 
+fn advancing_full((mut bytes, _): Cx) -> Cx {
+    bytes.advance(bytes.len());
+    assert_eq!(bytes.as_slice(), &[][..]);
+    (bytes, &[][..])
+}
+
 fn truncating((mut bytes, expect): Cx) -> Cx {
     bytes.truncate(bytes.len() - 2);
     assert_eq!(bytes.as_slice(), &expect[..expect.len() - 2]);
     (bytes, &expect[..expect.len() - 2])
+}
+
+fn truncating_empty((mut bytes, _): Cx) -> Cx {
+    bytes.truncate(0);
+    assert_eq!(bytes.as_slice(), &[][..]);
+    (bytes, &[][..])
 }
 
 fn splitting_off((mut bytes, expect): Cx) -> Cx {
@@ -75,9 +87,13 @@ fn splitting_to((mut bytes, expect): Cx) -> Cx {
 macro_rules! behavior {
     (@G1 $b1:ident; $c:ident,$d:ident) => {
         $d($b1($c()));
+        $d(advancing_full($b1($c())));
+        $d(truncating_empty($b1($c())));
     };
     (@G2 $b1:ident; $b2:ident; $c:ident,$d:ident) => {
         $d($b2($b1($c())));
+        $d(advancing_full($b2($b1($c()))));
+        $d(truncating_empty($b2($b1($c()))));
     };
 
     (@B1 $b1:ident; $c:ident,$d:ident) => {
