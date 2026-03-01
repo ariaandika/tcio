@@ -590,9 +590,11 @@ impl BytesMut {
     /// Panics if `at > self.len()`.
     #[inline]
     pub fn split_to(&mut self, at: usize) -> Self {
-        match self.try_split_to(at) {
-            Some(ok) => ok,
-            None => split_fail(at, self.len),
+        if at <= self.len() {
+            // SAFETY: `at <= self.len`
+            unsafe { self.split_to_unchecked(at) }
+        } else {
+            split_fail()
         }
     }
 
@@ -673,9 +675,11 @@ impl BytesMut {
     /// Panics if `at > self.len()`.
     #[inline]
     pub fn split_off(&mut self, at: usize) -> Self {
-        match self.try_split_off(at) {
-            Some(ok) => ok,
-            None => split_fail(at, self.len),
+        if at <= self.len() {
+            // SAFETY: `at <= self.len`
+            unsafe { self.split_off_unchecked(at) }
+        } else {
+            split_fail()
         }
     }
 
@@ -758,7 +762,7 @@ impl BytesMut {
         self.cap -= count;
     }
 
-    #[inline] // inline to allow optimizer removes `match` for promoted buffer
+    #[inline(always)] // inline to allow optimizer eliminate `shared::as_unpromoted_non_null` call
     fn increment(&mut self) {
         match shared::as_unpromoted_non_null(self.data) {
             Ok(offset) => {
@@ -1148,6 +1152,6 @@ impl std::io::Write for BytesMut {
 #[cfg_attr(not(panic = "immediate-abort"), inline(never), cold)]
 #[cfg_attr(panic = "immediate-abort", inline)]
 #[track_caller]
-fn split_fail(at: usize, len: usize) -> ! {
-    panic!("split out of bounds: at({at}) > self.len({len})")
+fn split_fail() -> ! {
+    panic!("split out of bounds")
 }

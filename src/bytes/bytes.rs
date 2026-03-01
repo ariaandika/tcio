@@ -381,9 +381,11 @@ impl Bytes {
     /// Panics if `at > self.len()`.
     #[inline]
     pub fn split_off(&mut self, at: usize) -> Self {
-        match self.try_split_off(at) {
-            Some(ok) => ok,
-            None => split_fail(at, self.len),
+        if at <= self.len() {
+            // SAFETY: `at <= self.len`
+            unsafe { self.split_off_unchecked(at) }
+        } else {
+            split_fail()
         }
     }
 
@@ -471,9 +473,11 @@ impl Bytes {
     /// Panics if `at > self.len()`.
     #[inline]
     pub fn split_to(&mut self, at: usize) -> Self {
-        match self.try_split_to(at) {
-            Some(ok) => ok,
-            None => split_fail(at, self.len),
+        if at <= self.len() {
+            // SAFETY: `at <= self.len`
+            unsafe { self.split_to_unchecked(at) }
+        } else {
+            split_fail()
         }
     }
 
@@ -582,7 +586,7 @@ impl Bytes {
         }
     }
 
-    #[inline]
+    #[inline(always)] // inline to allow optimizer eliminate `shared::as_unpromoted_non_null` call
     fn increment_mut(&mut self) {
         let Some(shared) = NonNull::new(*self.data.get_mut()) else {
             return;
@@ -841,6 +845,6 @@ impl std::io::Read for Bytes {
 #[cfg_attr(not(panic = "immediate-abort"), inline(never), cold)]
 #[cfg_attr(panic = "immediate-abort", inline)]
 #[track_caller]
-fn split_fail(at: usize, len: usize) -> ! {
-    panic!("split out of bounds: at({at}) > self.len({len})")
+fn split_fail() -> ! {
+    panic!("split out of bounds")
 }
