@@ -1,6 +1,6 @@
 //! Provide utilities for formatting.
 
-/// Lossy [`Debug`] and [`Display`] implementation of `[u8]`.
+/// [`Debug`] and [`Display`] implementation of `[u8]` that print ASCII graphic character.
 ///
 /// # Examples
 ///
@@ -17,16 +17,9 @@
 /// [`Debug`]: std::fmt::Debug
 /// [`Display`]: std::fmt::Display
 #[inline]
-pub fn lossy<B: AsRef<[u8]>>(buf: &B) -> LossyFmt<'_> {
-    LossyFmt(buf.as_ref())
-}
-
-/// Return type of [`lossy`].
-pub struct LossyFmt<'a>(&'a [u8]);
-
-impl std::fmt::Display for LossyFmt<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for &b in self.0 {
+pub fn lossy<B: AsRef<[u8]>>(buf: &B) -> impl std::fmt::Debug + std::fmt::Display {
+    std::fmt::from_fn(|f|{
+        for &b in buf.as_ref() {
             if b == b'\r' {
                 f.write_str("\\r")?;
             } else if b == b'\n' {
@@ -38,12 +31,5 @@ impl std::fmt::Display for LossyFmt<'_> {
             }
         }
         Ok(())
-    }
+    })
 }
-
-impl std::fmt::Debug for LossyFmt<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "b\"{self}\"")
-    }
-}
-
