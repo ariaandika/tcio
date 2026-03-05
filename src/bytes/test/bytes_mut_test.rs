@@ -157,7 +157,7 @@ fn test_owned_into_vec() {
 }
 
 #[test]
-fn test_owned_into_mut() {
+fn test_owned_into_shared() {
     behavior!(owned, into_shared);
 }
 
@@ -174,7 +174,7 @@ fn test_shared_into_vec() {
 }
 
 #[test]
-fn test_shared_into_mut() {
+fn test_shared_into_shared() {
     behavior!(shared, into_shared);
 }
 
@@ -191,7 +191,7 @@ fn test_from_vec_into_vec() {
 }
 
 #[test]
-fn test_from_vec_into_mut() {
+fn test_from_vec_into_shared() {
     behavior!(from_vec, into_shared);
 }
 
@@ -208,7 +208,7 @@ fn test_from_vec_excess_into_vec() {
 }
 
 #[test]
-fn test_from_vec_excess_into_mut() {
+fn test_from_vec_excess_into_shared() {
     behavior!(from_vec_excess, into_shared);
 }
 

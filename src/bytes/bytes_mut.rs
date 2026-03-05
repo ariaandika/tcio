@@ -312,6 +312,10 @@ impl BytesMut {
         self.ptr.as_ptr()
     }
 
+    pub(crate) const fn as_non_null(&self) -> NonNull<u8> {
+        self.ptr
+    }
+
     /// Returns the remaining spare capacity of the `BytesMut` as a slice of `MaybeUninit<u8>`.
     ///
     /// The returned slice can be used to fill the buffer with data (e.g. by reading from a file)

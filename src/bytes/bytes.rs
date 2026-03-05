@@ -651,11 +651,12 @@ impl From<Box<[u8]>> for Bytes {
 impl From<Vec<u8>> for Bytes {
     #[inline]
     fn from(vec: Vec<u8>) -> Self {
-        let (ptr, len, cap) = vec.into_raw_parts();
-        let ptr = NonNull::new(ptr).expect("vec cannot be null");
-        if len == 0 {
-            Self::empty(ptr)
-        } else if len == cap {
+        let ptr = NonNull::new(vec.as_ptr().cast_mut()).expect("vec cannot be null");
+        if vec.is_empty() {
+            return Self::empty(ptr);
+        }
+        let (_, len, cap) = vec.into_raw_parts();
+        if len == cap {
             // this is the ideal form, `len` and `cap` can be stored in single field
             let data = AtomicPtr::new(shared::NEW_UNPROMOTED.as_ptr());
             Self { ptr, len, data }
@@ -678,10 +679,11 @@ impl From<Vec<u8>> for Bytes {
 impl From<BytesMut> for Bytes {
     #[inline]
     fn from(value: BytesMut) -> Self {
+        if value.is_empty() {
+            return Self::empty(value.as_non_null());
+        }
         let (ptr, len, cap, data) = value.into_raw_parts();
-        if len == 0 {
-            Self::empty(ptr)
-        } else if let Some(offset) = shared::as_unpromoted(data.as_ptr()) {
+        if let Some(offset) = shared::as_unpromoted(data.as_ptr()) {
             // same procedure as `From<Vec<u8>>`
             if len == cap {
                 let data = AtomicPtr::new(data.as_ptr());
