@@ -215,6 +215,14 @@ fn test_from_vec_excess_into_shared() {
 // ===== Allocation =====
 
 #[test]
+fn test_empty_reserve() {
+    let mut bytes = BytesMut::new();
+    bytes.reserve(16);
+    bytes.extend_from_slice(b"Hello World!");
+    assert_eq!(bytes.as_slice(), b"Hello World!");
+}
+
+#[test]
 fn test_reserve() {
     let mut bytes = BytesMut::copy_from_slice(DATA);
     let base_ptr = bytes.as_ptr();

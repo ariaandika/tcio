@@ -495,9 +495,9 @@ impl BytesMut {
                             self.len()
                         )
                     }
+                    shared::release(self.data);
                 }
 
-                shared::release(self.data);
                 self.ptr = new_base_ptr;
                 self.cap = new_cap;
                 self.data = shared::NEW_UNPROMOTED;
