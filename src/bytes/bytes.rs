@@ -28,7 +28,6 @@ impl Drop for Bytes {
         let Some(shared) = NonNull::new(*self.data.get_mut()) else {
             return;
         };
-        debug_assert_ne!(self.len, 0);
         match shared::as_unpromoted(shared.as_ptr()) {
             Some(offset) => shared::deallocate(self.ptr, self.len, offset),
             None => shared::release(shared),
